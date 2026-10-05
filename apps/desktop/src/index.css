@@ -62,4 +62,9 @@
     scrollbar-width: thin;
     scrollbar-color: hsl(240 4% 22%) transparent;
   }
+
+  /* Select 无任何选项时隐藏空弹层（否则会显示一个短条） */
+  [data-radix-popper-content-wrapper]:has([data-radix-select-viewport]:empty) {
+    display: none;
+  }
 }
