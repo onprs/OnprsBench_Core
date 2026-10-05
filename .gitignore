@@ -31,7 +31,10 @@ dist-ssr/
 # ===== Rust / Tauri =====
 target/
 src-tauri/target/
-src-tauri/gen/
+**/src-tauri/gen/
+
+# ===== 构建中间产物 =====
+*.tsbuildinfo
 
 # ===== 本地数据（SQLite、日志、运行产物）=====
 *.db
@@ -39,6 +42,7 @@ src-tauri/gen/
 *.sqlite
 *.sqlite3
 data/
+.devdata/
 logs/
 *.log
 

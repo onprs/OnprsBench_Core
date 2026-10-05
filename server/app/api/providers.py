@@ -1,0 +1,281 @@
+"""Provider / Model / Deployment / ReasoningProfile API。"""
+
+from __future__ import annotations
+
+import httpx
+import sqlalchemy as sa
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from ..db import get_db
+from ..models import Deployment, Model, Provider, ReasoningProfile
+from ..runtime.factory import PROVIDER_TYPE_DEFAULTS
+from ..schemas import (
+    DeploymentCreate,
+    DeploymentUpdate,
+    ModelCreate,
+    ProviderCreate,
+    ProviderUpdate,
+    ReasoningProfileCreate,
+)
+from ..services import credentials
+
+router = APIRouter(prefix="/api", tags=["setup"])
+
+
+# ---------------------------------------------------------------------------
+# 序列化
+# ---------------------------------------------------------------------------
+
+
+def provider_dict(p: Provider) -> dict:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "type": p.type,
+        "base_url": p.base_url,
+        "has_credential": credentials.has_credential(p.credential_ref),
+        "created_at": p.created_at,
+    }
+
+
+def model_dict(m: Model) -> dict:
+    return {
+        "id": m.id,
+        "canonical_id": m.canonical_id,
+        "display_name": m.display_name,
+        "family": m.family,
+        "generation": m.generation,
+        "notes": m.notes,
+    }
+
+
+def deployment_dict(d: Deployment) -> dict:
+    return {
+        "id": d.id,
+        "name": d.name,
+        "model_id": d.model_id,
+        "model_display_name": d.model.display_name if d.model else None,
+        "model_canonical_id": d.model.canonical_id if d.model else None,
+        "provider_id": d.provider_id,
+        "provider_name": d.provider.name if d.provider else None,
+        "provider_type": d.provider.type if d.provider else None,
+        "api_model_name": d.api_model_name,
+        "endpoint_override": d.endpoint_override,
+        "custom_options": d.custom_options,
+        "price_input_per_mtok": d.price_input_per_mtok,
+        "price_output_per_mtok": d.price_output_per_mtok,
+        "created_at": d.created_at,
+    }
+
+
+def profile_dict(p: ReasoningProfile) -> dict:
+    return {
+        "id": p.id,
+        "deployment_id": p.deployment_id,
+        "name": p.name,
+        "reasoning_effort": p.reasoning_effort,
+        "reasoning_budget": p.reasoning_budget,
+        "max_output_tokens": p.max_output_tokens,
+        "temperature": p.temperature,
+        "top_p": p.top_p,
+        "seed": p.seed,
+        "provider_params": p.provider_params,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Provider
+# ---------------------------------------------------------------------------
+
+
+@router.get("/provider-types")
+def list_provider_types() -> dict:
+    return {"types": [{"type": k, **v} for k, v in PROVIDER_TYPE_DEFAULTS.items()]}
+
+
+@router.get("/providers")
+def list_providers(db: Session = Depends(get_db)) -> list[dict]:
+    return [provider_dict(p) for p in db.scalars(sa.select(Provider).order_by(Provider.created_at))]
+
+
+@router.post("/providers", status_code=201)
+def create_provider(body: ProviderCreate, db: Session = Depends(get_db)) -> dict:
+    if body.type not in PROVIDER_TYPE_DEFAULTS:
+        raise HTTPException(400, f"未知 provider type: {body.type}")
+    defaults = PROVIDER_TYPE_DEFAULTS[body.type]
+    base_url = body.base_url or defaults.get("base_url")
+
+    credential_ref = None
+    if body.api_key:
+        credential_ref = credentials.store_api_key(body.api_key)
+    elif defaults.get("needs_key") and body.type != "mock":
+        # 允许先创建后补 key，但明确提示
+        pass
+
+    provider = Provider(name=body.name, type=body.type, base_url=base_url, credential_ref=credential_ref)
+    db.add(provider)
+    db.commit()
+    return provider_dict(provider)
+
+
+@router.patch("/providers/{provider_id}")
+def update_provider(provider_id: str, body: ProviderUpdate, db: Session = Depends(get_db)) -> dict:
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "provider 不存在")
+    if body.name is not None:
+        provider.name = body.name
+    if body.base_url is not None:
+        provider.base_url = body.base_url
+    if body.api_key:
+        if provider.credential_ref:
+            credentials.delete_api_key(provider.credential_ref)
+        provider.credential_ref = credentials.store_api_key(body.api_key)
+    db.commit()
+    return provider_dict(provider)
+
+
+@router.delete("/providers/{provider_id}", status_code=204)
+def delete_provider(provider_id: str, db: Session = Depends(get_db)) -> None:
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "provider 不存在")
+    used = db.scalar(sa.select(sa.func.count()).select_from(Deployment).where(Deployment.provider_id == provider_id))
+    if used:
+        raise HTTPException(409, "provider 仍被 Deployment 引用，不能删除")
+    if provider.credential_ref:
+        credentials.delete_api_key(provider.credential_ref)
+    db.delete(provider)
+    db.commit()
+
+
+@router.get("/providers/{provider_id}/models")
+def list_provider_models(provider_id: str, db: Session = Depends(get_db)) -> dict:
+    """从 Provider 拉取可用模型列表（OpenAI 风格 GET /models，尽力而为）。"""
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "provider 不存在")
+
+    if provider.type == "mock":
+        return {"models": ["mock-strong", "mock-weak"]}
+
+    base = (provider.base_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(400, "该 provider 未配置 base_url，无法拉取模型列表")
+
+    headers: dict[str, str] = {}
+    api_key = credentials.get_api_key(provider.credential_ref) if provider.credential_ref else None
+    if api_key:
+        if provider.type == "anthropic":
+            headers["x-api-key"] = api_key
+            headers["anthropic-version"] = "2023-06-01"
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        resp = httpx.get(f"{base}/models", headers=headers, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise HTTPException(502, f"拉取模型列表失败: {exc}") from exc
+
+    items = data.get("data", [])
+    return {"models": sorted(str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id"))}
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+
+
+@router.get("/models")
+def list_models(db: Session = Depends(get_db)) -> list[dict]:
+    return [model_dict(m) for m in db.scalars(sa.select(Model).order_by(Model.canonical_id))]
+
+
+@router.post("/models", status_code=201)
+def create_model(body: ModelCreate, db: Session = Depends(get_db)) -> dict:
+    existing = db.scalar(sa.select(Model).where(Model.canonical_id == body.canonical_id))
+    if existing:
+        return model_dict(existing)
+    model = Model(**body.model_dump())
+    db.add(model)
+    db.commit()
+    return model_dict(model)
+
+
+# ---------------------------------------------------------------------------
+# Deployment
+# ---------------------------------------------------------------------------
+
+
+@router.get("/deployments")
+def list_deployments(db: Session = Depends(get_db)) -> list[dict]:
+    return [deployment_dict(d) for d in db.scalars(sa.select(Deployment).order_by(Deployment.created_at))]
+
+
+@router.post("/deployments", status_code=201)
+def create_deployment(body: DeploymentCreate, db: Session = Depends(get_db)) -> dict:
+    if db.get(Model, body.model_id) is None:
+        raise HTTPException(404, "model 不存在")
+    if db.get(Provider, body.provider_id) is None:
+        raise HTTPException(404, "provider 不存在")
+    deployment = Deployment(**body.model_dump())
+    db.add(deployment)
+    db.commit()
+    db.refresh(deployment)
+    return deployment_dict(deployment)
+
+
+@router.patch("/deployments/{deployment_id}")
+def update_deployment(deployment_id: str, body: DeploymentUpdate, db: Session = Depends(get_db)) -> dict:
+    deployment = db.get(Deployment, deployment_id)
+    if deployment is None:
+        raise HTTPException(404, "deployment 不存在")
+    for field_name, value in body.model_dump(exclude_unset=True).items():
+        setattr(deployment, field_name, value)
+    db.commit()
+    db.refresh(deployment)
+    return deployment_dict(deployment)
+
+
+@router.delete("/deployments/{deployment_id}", status_code=204)
+def delete_deployment(deployment_id: str, db: Session = Depends(get_db)) -> None:
+    deployment = db.get(Deployment, deployment_id)
+    if deployment is None:
+        raise HTTPException(404, "deployment 不存在")
+    db.delete(deployment)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# ReasoningProfile
+# ---------------------------------------------------------------------------
+
+
+@router.get("/reasoning-profiles")
+def list_reasoning_profiles(deployment_id: str | None = None, db: Session = Depends(get_db)) -> list[dict]:
+    query = sa.select(ReasoningProfile)
+    if deployment_id:
+        query = query.where(ReasoningProfile.deployment_id == deployment_id)
+    return [profile_dict(p) for p in db.scalars(query)]
+
+
+@router.post("/reasoning-profiles", status_code=201)
+def create_reasoning_profile(body: ReasoningProfileCreate, db: Session = Depends(get_db)) -> dict:
+    if db.get(Deployment, body.deployment_id) is None:
+        raise HTTPException(404, "deployment 不存在")
+    profile = ReasoningProfile(**body.model_dump())
+    db.add(profile)
+    db.commit()
+    return profile_dict(profile)
+
+
+@router.delete("/reasoning-profiles/{profile_id}", status_code=204)
+def delete_reasoning_profile(profile_id: str, db: Session = Depends(get_db)) -> None:
+    profile = db.get(ReasoningProfile, profile_id)
+    if profile is None:
+        raise HTTPException(404, "reasoning profile 不存在")
+    db.delete(profile)
+    db.commit()

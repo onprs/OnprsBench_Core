@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OnprsBench",
+  "version": "0.1.0",
+  "identifier": "dev.onprsbench.core",
+  "build": {
+    "beforeDevCommand": "node scripts/dev.mjs",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:14200",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OnprsBench",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8765 ws://localhost:14200; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/32x32.png", "icons/icon.png", "icons/icon.ico"]
+  }
+}

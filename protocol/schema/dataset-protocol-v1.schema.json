@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onprsbench.dev/schema/dataset-protocol-v1.schema.json",
+  "title": "OnprsBench Dataset Protocol v1",
+  "description": "评测框架与数据集之间唯一的稳定接口。数据集目录根部的 manifest.json 必须符合本 Schema。",
+  "type": "object",
+  "required": ["protocol_version", "dataset", "suites", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "const": "1",
+      "description": "协议主版本号。框架通过该字段做 capability negotiation。"
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["id", "name", "version", "release_date", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "数据集全局唯一标识，例如 onprs.reasoning.core"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "version": {
+          "type": "string",
+          "description": "数据集语义化版本，独立发版，与框架版本无关"
+        },
+        "release_date": { "type": "string", "format": "date" },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "数据集内容修订标识（git commit 或内容 hash），Run 追溯依据"
+        },
+        "description": { "type": "string" },
+        "homepage": { "type": "string", "format": "uri" },
+        "license": { "type": "string" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "数据集声明的可选能力，如 tool_use、multimodal、streaming"
+        }
+      }
+    },
+    "suites": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "task_ids"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "task_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "uniqueItems": true
+          }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "required": ["path", "sha256", "media_type"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "相对数据集根目录的 POSIX 路径"
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "media_type": { "type": "string" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "revision", "type", "tags", "solver_visible", "judge_visible", "metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "数据集内唯一的 task id"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "task 内容修订号，内容变更必须递增"
+        },
+        "type": {
+          "type": "string",
+          "description": "任务类型，如 reasoning、math、code、knowledge"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "solver_visible": {
+          "type": "object",
+          "required": ["problem"],
+          "additionalProperties": false,
+          "properties": {
+            "problem": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Solver 唯一可见的题面"
+            },
+            "assets": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/asset" },
+              "uniqueItems": true
+            }
+          }
+        },
+        "judge_visible": {
+          "type": "object",
+          "required": ["reference", "rubric"],
+          "additionalProperties": false,
+          "properties": {
+            "reference": {
+              "type": "string",
+              "description": "参考解答 / 标准答案"
+            },
+            "rubric": {
+              "type": "object",
+              "required": ["version", "dimensions"],
+              "additionalProperties": false,
+              "properties": {
+                "version": { "type": "string", "minLength": 1 },
+                "dimensions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "description", "max_score"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+                      "description": { "type": "string" },
+                      "max_score": { "type": "number", "exclusiveMinimum": 0 }
+                    }
+                  }
+                },
+                "fatal_error_policy": {
+                  "type": "string",
+                  "description": "致命错误判定说明，fatal_error=true 时维度分得分为 0"
+                }
+              }
+            },
+            "pitfalls": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "常见错误，仅 Judge 可见"
+            },
+            "alternatives": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "可接受的替代解法，仅 Judge 可见"
+            },
+            "assets": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/asset" },
+              "uniqueItems": true
+            }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["created_at", "source", "domains", "contamination", "freshness", "license"],
+          "additionalProperties": false,
+          "properties": {
+            "created_at": { "type": "string", "format": "date" },
+            "source": { "type": "string" },
+            "domains": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" },
+              "uniqueItems": true
+            },
+            "contamination": {
+              "type": "string",
+              "enum": ["none", "low", "medium", "high", "unknown"],
+              "description": "该题进入公开训练语料的风险评估"
+            },
+            "freshness": {
+              "type": "string",
+              "description": "内容时效性说明，如 static、2025-Q4"
+            },
+            "license": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "protocol_version": "1",
+  "dataset": {
+    "id": "onprs.mock.protocol-sample",
+    "name": "Mock Protocol Sample",
+    "version": "0.1.0",
+    "release_date": "2025-01-01",
+    "revision": "mock-rev-1",
+    "description": "Dataset Protocol v1 的测试样例，仅用于验证协议加载与端到端流程，不构成任何真实评测结论。",
+    "license": "MIT",
+    "capabilities": []
+  },
+  "suites": [
+    {
+      "id": "mock-core",
+      "name": "Mock Core Suite",
+      "description": "协议测试样例套件",
+      "task_ids": ["mock-sum-001", "mock-logic-001"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "mock-sum-001",
+      "revision": 1,
+      "type": "math",
+      "tags": ["mock", "arithmetic"],
+      "solver_visible": {
+        "problem": "计算 17 + 25，并简要说明计算过程。"
+      },
+      "judge_visible": {
+        "reference": "42。17 + 25 = 42。",
+        "rubric": {
+          "version": "1.0",
+          "dimensions": [
+            { "id": "correctness", "description": "最终答案是否为 42", "max_score": 100 },
+            { "id": "explanation", "description": "是否给出合理的计算过程", "max_score": 100 }
+          ],
+          "fatal_error_policy": "最终答案错误即 fatal_error=true，全部维度记 0 分。"
+        },
+        "pitfalls": ["得数写成 32 或 52 等进位错误"],
+        "alternatives": ["分步竖式说明", "17 + 25 = 17 + 20 + 5"]
+      },
+      "metadata": {
+        "created_at": "2025-01-01",
+        "source": "人工编写（协议测试样例）",
+        "domains": ["arithmetic"],
+        "contamination": "unknown",
+        "freshness": "static",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "mock-logic-001",
+      "revision": 1,
+      "type": "reasoning",
+      "tags": ["mock", "logic"],
+      "solver_visible": {
+        "problem": "三个人甲、乙、丙中只有一个人说真话。甲说：乙说真话。乙说：丙说真话。丙说：甲和乙都在说谎。谁说真话？"
+      },
+      "judge_visible": {
+        "reference": "丙说真话。若甲真则乙真，矛盾；若乙真则丙真，矛盾；若丙真，则甲、乙均假，自洽。",
+        "rubric": {
+          "version": "1.0",
+          "dimensions": [
+            { "id": "correctness", "description": "结论是否为丙说真话", "max_score": 100 },
+            { "id": "proof", "description": "是否排除甲、乙两种情形并验证丙自洽", "max_score": 100 }
+          ],
+          "fatal_error_policy": "结论选错人即 fatal_error=true，全部维度记 0 分。"
+        },
+        "pitfalls": ["只给结论没有排除过程", "把‘只有一人说真话’误读为‘至少一人’"],
+        "alternatives": ["真值表枚举法"]
+      },
+      "metadata": {
+        "created_at": "2025-01-01",
+        "source": "人工编写（协议测试样例）",
+        "domains": ["logic"],
+        "contamination": "unknown",
+        "freshness": "static",
+        "license": "MIT"
+      }
+    }
+  ]
+}
