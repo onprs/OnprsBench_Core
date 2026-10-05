@@ -1,0 +1,48 @@
+# ===== 密钥与本地配置（任何情况下不得提交）=====
+.env
+.env.*
+*.pem
+*.key
+secrets.*
+*.local
+config/local.*
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# ===== Node / 前端 =====
+node_modules/
+dist/
+dist-ssr/
+*.local.ts
+
+# ===== Rust / Tauri =====
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# ===== 本地数据（SQLite、日志、运行产物）=====
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+logs/
+*.log
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
