@@ -2,6 +2,11 @@
 
 AGGREGATION_VERSION 标识当前聚合算法版本；修改算法必须新增版本号，
 历史 JudgeExecution.weighted_total 可在不改动原始输出的情况下按任意版本重算。
+
+weighted-mean/v2（对齐 Dataset Protocol v1 的 weight + anchors rubric 模型）：
+- 维度分为 0~1 小数（参照 rubric anchors）
+- 总分 = Σ(权重 × 维度分) × 100；fatal_error 记 0
+- v1（已废弃）为 max_score 归一化模型，仅存在于旧协议样例
 """
 
 from __future__ import annotations
@@ -10,7 +15,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-AGGREGATION_VERSION = "weighted-mean/v1"
+AGGREGATION_VERSION = "weighted-mean/v2"
 
 
 @dataclass
@@ -44,7 +49,7 @@ def extract_json_object(text: str) -> dict | None:
 
 
 def parse_judge_output(raw_text: str, rubric: dict) -> ParsedJudgeOutput:
-    """解析 Judge 原始输出为结构化评分。维度分按 rubric 过滤并截断到 [0, max_score]。"""
+    """解析 Judge 原始输出为结构化评分。维度分按 rubric 过滤并截断到 [0, 1]。"""
     parsed = extract_json_object(raw_text)
     if parsed is None:
         return ParsedJudgeOutput(parse_ok=False, error="无法从输出中解析 JSON")
@@ -55,10 +60,10 @@ def parse_judge_output(raw_text: str, rubric: dict) -> ParsedJudgeOutput:
 
     rubric_dims = {d["id"]: d for d in rubric.get("dimensions", [])}
     dimensions: dict[str, float] = {}
-    for dim_id, dim in rubric_dims.items():
+    for dim_id in rubric_dims:
         value = raw_dims.get(dim_id)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            dimensions[dim_id] = float(max(0.0, min(float(dim["max_score"]), float(value))))
+            dimensions[dim_id] = float(max(0.0, min(1.0, float(value))))
 
     if not dimensions:
         return ParsedJudgeOutput(parse_ok=False, error="dimensions 中没有可用的 rubric 维度得分")
@@ -76,20 +81,22 @@ def parse_judge_output(raw_text: str, rubric: dict) -> ParsedJudgeOutput:
 
 
 def weighted_total(parsed: ParsedJudgeOutput, rubric: dict) -> float | None:
-    """weighted-mean/v1：fatal_error 记 0；否则按 rubric 满分归一化到 0~100。"""
+    """weighted-mean/v2：fatal_error 记 0；否则按 rubric 权重加权并放大到 0~100。"""
     if not parsed.parse_ok:
         return None
     if parsed.fatal_error:
         return 0.0
     rubric_dims = {d["id"]: d for d in rubric.get("dimensions", [])}
     total = 0.0
-    max_total = 0.0
+    weight_sum = 0.0
     for dim_id, score in parsed.dimensions.items():
         dim = rubric_dims.get(dim_id)
         if dim is None:
             continue
-        total += score
-        max_total += float(dim["max_score"])
-    if max_total <= 0:
+        weight = float(dim["weight"])
+        total += weight * score
+        weight_sum += weight
+    if weight_sum <= 0:
         return None
-    return round(total / max_total * 100.0, 4)
+    # 权重和不为 1 时按实际权重归一化（协议要求 1.0，此处容错）
+    return round(total / weight_sum * 100.0, 4)

@@ -1,7 +1,8 @@
 """Mock 模型客户端：确定性、零网络，用于测试与离线演示。
 
 - Solver 角色：根据题面 hash 生成确定性回答。
-- Judge 角色：识别 judge prompt 标记，输出符合协议的结构化 JSON 评分，
+- Judge 角色：识别 judge prompt 标记，解析其中的 rubric 维度行
+  （`- <id>（权重 <w>）：...`），输出 0~1 维度分的结构化 JSON，
   分数由候选回答内容 hash 决定，保证可重复且不同回答得分不同。
 """
 
@@ -10,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from typing import Any
 
 from .base import CallTimer, ModelRequest, ModelResult, UsageInfo
@@ -81,19 +83,22 @@ class MockClient:
         return variants[seed]
 
     def _judge_response(self, prompt_text: str) -> str:
-        # 从 prompt 中提取候选回答段落，分数由内容决定，保证确定性
+        # 从 prompt 中提取 rubric 维度与候选回答段落，分数由内容决定，保证确定性
+        dim_ids = re.findall(r"^-\s+([a-z0-9_]+)\uff08\u6743\u91cd", prompt_text, re.MULTILINE)
+        if not dim_ids:
+            dim_ids = ["correctness"]
         candidate = prompt_text.split(JUDGE_PROMPT_MARKER, 1)[-1]
         h = _hash_int(candidate + self._name)
         wrong = "41" in candidate and "42" not in candidate
-        base = 20 if wrong else 70
-        correctness = min(100, base + h % 30)
-        second = min(100, base + (h // 7) % 30)
+        dimensions = {}
+        for index, dim_id in enumerate(dim_ids):
+            if wrong:
+                score = ((h >> (index * 3)) % 20) / 100.0  # 0.00 ~ 0.19
+            else:
+                score = 0.75 + ((h >> (index * 5)) % 24) / 100.0  # 0.75 ~ 0.98
+            dimensions[dim_id] = round(score, 2)
         payload = {
-            "dimensions": {
-                "correctness": correctness,
-                "explanation": second,
-                "proof": second,
-            },
+            "dimensions": dimensions,
             "fatal_error": wrong,
             "summary": "mock judge 确定性评分",
             "key_errors": ["最终答案错误"] if wrong else [],

@@ -1,0 +1,76 @@
+protocol_version: '1'
+dataset:
+  id: onprs-mock-protocol-sample
+  name: Mock Protocol Sample
+  version: 0.1.0
+  release_date: '2025-01-01'
+  revision: mock-rev-1
+  description: Dataset Protocol v1 的测试样例，仅用于验证协议加载与端到端流程，不构成任何真实评测结论。
+  license: MIT
+suites:
+- id: mock-core
+  name: Mock Core Suite
+  description: 协议测试样例套件
+  layer: derived
+  adapter: null
+  tasks:
+  - id: mock-sum-001
+    revision: 1
+    title: 两位数加法（协议测试样例）
+    type: academic_qa
+    tags:
+    - mock
+    - arithmetic
+    status: active
+    path: tasks/mock-core/mock-sum-001
+    solver_visible:
+    - problem.md
+    judge_visible:
+    - reference/alternatives.md
+    - reference/canonical.md
+    - reference/pitfalls.md
+    - rubric.yaml
+    metadata:
+      difficulty: easy
+      freshness: F0
+      contamination: unknown
+      flagship: false
+    hashes:
+      bundle_sha256: 3eddfe96eba973161b893007d18403a9b860b6fd0ca30559f5b72402f2b8df42
+      files:
+        meta.yaml: d2ad15131203a57e16c6674dd78a6acec110cc44533ade2894f871737d6e85f9
+        problem.md: d8ec63c979b4a3e2c97f6bf76ad2378cbdfc09d55e8323e7e871f3a6c08c824c
+        reference/alternatives.md: dad2a37218158e15249913a9a8f549635c93ba1235c3b87dc3712dd822ae734d
+        reference/canonical.md: 3f8afcb1e153d1e15281e815710d011fd1e9b873c6afa1eed063e9659ed1cca8
+        reference/pitfalls.md: 91a0a0520e629d7f26aeb1526275f5b84d9638e4814dca0c5229f93ef9094817
+        rubric.yaml: 4be9210a6f6ca771ff38728d80674108dd101b5ff6a83b7ed118ebb14535bdc1
+  - id: mock-logic-001
+    revision: 1
+    title: 三人真话推理（协议测试样例）
+    type: academic_qa
+    tags:
+    - mock
+    - logic
+    status: active
+    path: tasks/mock-core/mock-logic-001
+    solver_visible:
+    - problem.md
+    judge_visible:
+    - reference/alternatives.md
+    - reference/canonical.md
+    - reference/pitfalls.md
+    - rubric.yaml
+    metadata:
+      difficulty: easy
+      freshness: F0
+      contamination: unknown
+      flagship: false
+    hashes:
+      bundle_sha256: 628754e8c64220699a895c166fcb823598cb01353c607f56db8710cb7f760c58
+      files:
+        meta.yaml: 3f647cd66236d00860e4bc837cfffe42803aed84a3bb51ae4f4b1c5e2fc4d4ce
+        problem.md: 435b0e3a171f2e28b69f265e420b9e773c8aafa50f8d6d83594223d4b9288bfa
+        reference/alternatives.md: a4e1b04dbf58403b9e45036a4316da320f305035c7686a05414ce4d13d7dbd02
+        reference/canonical.md: d343312d957087ef2ede888db71d86af1e56b65abe5fe27138942c02a52eb24a
+        reference/pitfalls.md: 585d0869d8278b08e3032b72527ea83a7fed72e06ea6ca879ba2967ebd484c2d
+        rubric.yaml: 642df314a8aaa0bf23e9ae0e2b65ce8fc6b280ff18e6c24731cb60840cd1bbf8

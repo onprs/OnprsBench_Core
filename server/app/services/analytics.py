@@ -16,6 +16,7 @@ from ..models import (
     Run,
     SolverExecution,
     UsageRecord,
+    VerifierExecution,
 )
 
 # Judge 总分标准差超过该阈值即标记 High Judge Disagreement
@@ -63,6 +64,14 @@ def run_results(session: Session, run_id: str) -> dict:
     for je in judge_executions:
         judges_by_solver_execution.setdefault(je.solver_execution_id, []).append(je)
 
+    # 每个 solver execution 最近一次程序判定（可能不存在：任务无 verify 契约时）
+    verifier_rows = session.scalars(
+        sa.select(VerifierExecution).where(VerifierExecution.run_id == run_id)
+    ).all()
+    verifier_by_solver_execution: dict[str, VerifierExecution] = {}
+    for ve in sorted(verifier_rows, key=lambda r: r.started_at or run.created_at):
+        verifier_by_solver_execution[ve.solver_execution_id] = ve
+
     cost_by_owner: dict[str, float | None] = {}
     for record in usage_records:
         # 任一记录价格未知 → 该 owner 成本未知（None），不静默记 0
@@ -85,6 +94,7 @@ def run_results(session: Session, run_id: str) -> dict:
         judges = judges_by_solver_execution.get(se.id, [])
         totals = [j.weighted_total for j in judges if j.weighted_total is not None]
         summary = summarize_judge_totals(totals)
+        verifier = verifier_by_solver_execution.get(se.id)
         target["entries"].append(
             {
                 "solver_execution_id": se.id,
@@ -95,6 +105,18 @@ def run_results(session: Session, run_id: str) -> dict:
                 "error": se.error,
                 "total_latency_s": se.total_latency_s,
                 "cost": cost_by_owner.get(se.id, 0.0),
+                "verifier": (
+                    {
+                        "verifier_execution_id": verifier.id,
+                        "kind": verifier.verifier_kind,
+                        "status": verifier.status,
+                        "facts": verifier.facts_json,
+                        "wall_time_s": verifier.wall_time_s,
+                        "error": verifier.error,
+                    }
+                    if verifier
+                    else None
+                ),
                 "judge_score_summary": summary.__dict__,
                 "judges": [
                     {

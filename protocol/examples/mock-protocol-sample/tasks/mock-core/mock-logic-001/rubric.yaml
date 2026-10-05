@@ -1,0 +1,22 @@
+rubric_version: 1
+dimensions:
+  - id: correctness
+    weight: 0.60
+    description: 结论是否为乙说真话。结论选错人属于致命错误（fatal_error=true）。
+    anchors:
+      - score: 0.0
+        description: 结论不是乙。
+      - score: 0.5
+        description: 结论为乙但表述含糊或缺乏确定性。
+      - score: 1.0
+        description: 明确指出乙说真话。
+  - id: proof
+    weight: 0.40
+    description: 是否逐一检验假设并验证唯一自洽的情形。
+    anchors:
+      - score: 0.0
+        description: 只有结论没有任何推理。
+      - score: 0.5
+        description: 只检验了部分假设，未验证全部情形。
+      - score: 1.0
+        description: 完整推理：利用"说真话 ⇔ 陈述为真"的等价关系逐一排除，验证乙真、甲假、丙假自洽且唯一。

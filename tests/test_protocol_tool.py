@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOL = REPO_ROOT / "protocol" / "tools" / "validate_dataset.py"
@@ -35,10 +36,11 @@ def test_valid_sample_passes() -> None:
 def test_invalid_dataset_rejected(tmp_path: Path) -> None:
     dest = tmp_path / "bad-dataset"
     shutil.copytree(SAMPLE, dest)
-    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    manifest_path = dest / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     # 破坏 solver/judge 隔离所必需的结构：删除 judge_visible
-    del manifest["tasks"][0]["judge_visible"]
-    (dest / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    del manifest["suites"][0]["tasks"][0]["judge_visible"]
+    manifest_path.write_text(yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8")
 
     result = run_validator(dest)
     assert result.returncode == 1
@@ -48,4 +50,15 @@ def test_invalid_dataset_rejected(tmp_path: Path) -> None:
 def test_missing_manifest_rejected(tmp_path: Path) -> None:
     result = run_validator(tmp_path)
     assert result.returncode == 1
-    assert "manifest.json" in result.stderr
+    assert "manifest.yaml" in result.stderr
+
+
+def test_tampered_file_rejected(tmp_path: Path) -> None:
+    dest = tmp_path / "tampered-dataset"
+    shutil.copytree(SAMPLE, dest)
+    problem = dest / "tasks" / "mock-core" / "mock-sum-001" / "problem.md"
+    problem.write_text("被篡改的题面", encoding="utf-8")
+
+    result = run_validator(dest)
+    assert result.returncode == 1
+    assert "hash" in result.stderr

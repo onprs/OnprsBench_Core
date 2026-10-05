@@ -2,6 +2,14 @@
 
 独立脚本，不依赖框架内部代码。数据集仓库可用它自检，框架加载时也执行相同校验。
 
+校验项：
+- manifest.yaml 符合 JSON Schema（protocol/schema/dataset-protocol-v1.schema.json）
+- protocol_version 受支持
+- task id 全局唯一；path 目录存在
+- 文件 hash、bundle hash 与 manifest 声明一致；无未登记文件
+- solver_visible / judge_visible 不重叠，且分别含 problem.md / rubric.yaml
+- rubric.yaml 可解析，维度权重之和为 1.0
+
 用法：
     python validate_dataset.py <dataset_dir>
 
@@ -16,6 +24,7 @@ import json
 import sys
 from pathlib import Path
 
+import yaml
 from jsonschema import Draft202012Validator
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "dataset-protocol-v1.schema.json"
@@ -23,33 +32,56 @@ SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "dataset-proto
 SUPPORTED_PROTOCOL_VERSIONS = {"1"}
 
 
-def canonical_json(data: object) -> bytes:
-    """生成规范化 JSON 字节串，用于 hash 计算。"""
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def task_hash(task: dict) -> str:
-    """task 内容 hash（sha256，基于规范化 JSON）。"""
-    return hashlib.sha256(canonical_json(task)).hexdigest()
+def bundle_sha256(file_hashes: dict[str, str]) -> str:
+    """协议定义的 bundle hash：路径字典序拼接 "<path>  <sha256>" 后再取 SHA-256。"""
+    lines = "".join(f"{rel}  {digest}\n" for rel, digest in sorted(file_hashes.items()))
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()
 
 
-def manifest_hash(manifest: dict) -> str:
-    """dataset manifest hash（sha256，基于规范化 JSON）。"""
-    return hashlib.sha256(canonical_json(manifest)).hexdigest()
+def manifest_hash(manifest_path: Path) -> str:
+    """manifest.yaml 文件字节的 SHA-256。"""
+    return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+
+def _check_rubric(task_dir: Path, judge_visible: list[str], task_id: str, errors: list[str]) -> None:
+    if "rubric.yaml" not in judge_visible:
+        errors.append(f"task {task_id}: judge_visible 缺少 rubric.yaml")
+        return
+    rubric_path = task_dir / "rubric.yaml"
+    if not rubric_path.is_file():
+        return  # 文件缺失已在 hash 校验中报错
+    try:
+        rubric = yaml.safe_load(rubric_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        errors.append(f"task {task_id}: rubric.yaml 不是合法 YAML: {exc}")
+        return
+    dimensions = (rubric or {}).get("dimensions") or []
+    if not dimensions:
+        errors.append(f"task {task_id}: rubric.yaml 缺少 dimensions")
+        return
+    total = sum(float(d.get("weight", 0)) for d in dimensions)
+    if abs(total - 1.0) > 1e-6:
+        errors.append(f"task {task_id}: rubric 维度权重之和为 {total}，应为 1.0")
 
 
 def validate_dataset(dataset_dir: Path) -> list[str]:
     """校验数据集目录，返回错误信息列表（空列表表示通过）。"""
     errors: list[str] = []
 
-    manifest_path = dataset_dir / "manifest.json"
+    manifest_path = dataset_dir / "manifest.yaml"
     if not manifest_path.is_file():
-        return [f"缺少 manifest.json: {manifest_path}"]
+        return [f"缺少 manifest.yaml: {manifest_path}"]
 
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return [f"manifest.json 不是合法 JSON: {exc}"]
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        return [f"manifest.yaml 不是合法 YAML: {exc}"]
+    if not isinstance(manifest, dict):
+        return ["manifest.yaml 顶层必须是对象"]
 
     # 1. JSON Schema 校验
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -61,51 +93,70 @@ def validate_dataset(dataset_dir: Path) -> list[str]:
         return errors
 
     # 2. 协议版本协商
-    version = manifest["protocol_version"]
-    if version not in SUPPORTED_PROTOCOL_VERSIONS:
-        errors.append(f"不支持的 protocol_version: {version}（支持: {sorted(SUPPORTED_PROTOCOL_VERSIONS)}）")
+    if manifest["protocol_version"] not in SUPPORTED_PROTOCOL_VERSIONS:
+        errors.append(f"不支持的 protocol_version: {manifest['protocol_version']}")
 
-    # 3. 引用完整性
-    tasks = manifest["tasks"]
-    task_ids = [t["id"] for t in tasks]
-    if len(task_ids) != len(set(task_ids)):
-        errors.append("tasks 中存在重复 task id")
-
-    all_suite_task_ids: list[str] = []
+    # 3. 逐 task 校验
+    seen_ids: set[str] = set()
     for suite in manifest["suites"]:
-        for tid in suite["task_ids"]:
-            if tid not in set(task_ids):
-                errors.append(f"suite {suite['id']} 引用了不存在的 task: {tid}")
-            all_suite_task_ids.append(tid)
+        for task in suite["tasks"]:
+            task_id = task["id"]
+            if task_id in seen_ids:
+                errors.append(f"task id 重复: {task_id}")
+                continue
+            seen_ids.add(task_id)
 
-    # 4. asset hash 校验
-    for task in tasks:
-        for section in ("solver_visible", "judge_visible"):
-            for asset in task.get(section, {}).get("assets", []) or []:
-                asset_path = dataset_dir / asset["path"]
-                if not asset_path.is_file():
-                    errors.append(f"task {task['id']}: asset 不存在: {asset['path']}")
-                    continue
-                digest = hashlib.sha256(asset_path.read_bytes()).hexdigest()
-                if digest != asset["sha256"]:
-                    errors.append(f"task {task['id']}: asset hash 不匹配: {asset['path']}")
+            task_dir = dataset_dir / task["path"]
+            if not task_dir.is_dir():
+                errors.append(f"task {task_id}: bundle 目录不存在: {task['path']}")
+                continue
+
+            declared = task["hashes"]["files"]
+            actual = {
+                p.relative_to(task_dir).as_posix(): sha256_file(p)
+                for p in sorted(task_dir.rglob("*"))
+                if p.is_file()
+            }
+            for rel, digest in declared.items():
+                if rel not in actual:
+                    errors.append(f"task {task_id}: 声明的文件不存在: {rel}")
+                elif actual[rel] != digest:
+                    errors.append(f"task {task_id}: 文件 hash 不匹配: {rel}")
+            for rel in actual:
+                if rel not in declared:
+                    errors.append(f"task {task_id}: 存在未登记 hash 的文件: {rel}")
+            if declared and bundle_sha256({k: v for k, v in actual.items() if k in declared}) != task["hashes"]["bundle_sha256"]:
+                errors.append(f"task {task_id}: bundle_sha256 不匹配")
+
+            solver_visible = task["solver_visible"]
+            judge_visible = task["judge_visible"]
+            overlap = set(solver_visible) & set(judge_visible)
+            if overlap:
+                errors.append(f"task {task_id}: solver/judge 可见性重叠: {sorted(overlap)}")
+            for rel in solver_visible + judge_visible:
+                if rel not in declared:
+                    errors.append(f"task {task_id}: 可见性引用了未登记文件: {rel}")
+            if not any(rel == "problem.md" or rel.startswith("assets/") for rel in solver_visible):
+                errors.append(f"task {task_id}: solver_visible 缺少 problem.md")
+            _check_rubric(task_dir, judge_visible, task_id, errors)
 
     return errors
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="校验 Dataset Protocol v1 数据集目录")
+    parser = argparse.ArgumentParser(description="校验数据集目录是否符合 Dataset Protocol v1")
     parser.add_argument("dataset_dir", type=Path)
     args = parser.parse_args()
 
     errors = validate_dataset(args.dataset_dir)
     if errors:
-        for err in errors:
-            print(f"ERROR: {err}", file=sys.stderr)
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print(f"OK: {args.dataset_dir}")
+    task_count = sum(len(s["tasks"]) for s in yaml.safe_load((args.dataset_dir / "manifest.yaml").read_text(encoding="utf-8"))["suites"])
+    print(f"OK: {args.dataset_dir}（{task_count} 个 task，manifest hash {manifest_hash(args.dataset_dir / 'manifest.yaml')}）")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

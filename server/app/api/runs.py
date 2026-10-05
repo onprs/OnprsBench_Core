@@ -49,6 +49,7 @@ def run_dict(run: Run, db: Session) -> dict:
         "started_at": run.started_at,
         "finished_at": run.finished_at,
         "solver_wall_time_s": run.solver_wall_time_s,
+        "verifier_wall_time_s": run.verifier_wall_time_s,
         "judge_wall_time_s": run.judge_wall_time_s,
         "total_wall_time_s": run.total_wall_time_s,
         "solver_cost": run.solver_cost,
@@ -109,7 +110,7 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
                 AggregationVersion(
                     name="weighted-mean",
                     version=aggregation.AGGREGATION_VERSION.split("/")[1],
-                    definition={"description": "维度分按 rubric 满分归一化到 0~100；fatal_error 记 0"},
+                    definition={"description": "总分 = Σ(维度权重 × 0~1 维度分) × 100；fatal_error 记 0"},
                 )
             )
         snapshot = ConfigSnapshot(payload=snapshot_payload)

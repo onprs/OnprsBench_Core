@@ -125,7 +125,11 @@ class ReasoningProfile(Base):
 
 
 class DatasetInstallation(Base):
-    """一次数据集安装。相同 manifest_hash 重复安装会复用已有记录。"""
+    """一次数据集安装。相同 manifest_hash 重复安装会复用已有记录。
+
+    source_path 指向安装时复制到数据目录的托管副本，与原始目录解耦，
+    保证原始目录移动/删除后历史 Run 仍可追溯与重新判定。
+    """
 
     __tablename__ = "dataset_installations"
 
@@ -137,7 +141,7 @@ class DatasetInstallation(Base):
     protocol_version: Mapped[str] = mapped_column(sa.String(16))
     manifest_hash: Mapped[str] = mapped_column(sa.String(64), unique=True)
     source_path: Mapped[str] = mapped_column(sa.String(2048))
-    suites: Mapped[list] = mapped_column(sa.JSON)  # [{id, name, task_ids}]
+    suites: Mapped[list] = mapped_column(sa.JSON)  # [{id, name, description, layer, adapter, task_ids}]
     capabilities: Mapped[list] = mapped_column(sa.JSON, default=list)
     installed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
@@ -145,7 +149,15 @@ class DatasetInstallation(Base):
 
 
 class TaskCache(Base):
-    """task 元数据缓存；payload 为 task 完整快照（含 solver/judge visible 内容）。"""
+    """task 元数据缓存；payload 为按 bundle 组装的完整 task 快照。
+
+    payload 结构（由 loader 从 task bundle 文件组装）：
+      id / revision / title / type / tags / status / suite_id / path
+      solver_visible: { problem, assets: [{path, sha256}] }
+      judge_visible: { reference, rubric, anchors: [{score, text}], judge_assets: [path] }
+      verify: verify.yaml 解析结果（可选）
+      metadata: { difficulty, freshness, contamination, flagship, meta: meta.yaml 全文 }
+    """
 
     __tablename__ = "tasks"
 
@@ -153,12 +165,17 @@ class TaskCache(Base):
     installation_id: Mapped[str] = mapped_column(sa.ForeignKey("dataset_installations.id"), index=True)
     task_id: Mapped[str] = mapped_column(sa.String(255), index=True)
     revision: Mapped[int] = mapped_column(sa.Integer)
-    task_hash: Mapped[str] = mapped_column(sa.String(64))
+    task_hash: Mapped[str] = mapped_column(sa.String(64))  # 协议 bundle_sha256
+    title: Mapped[str] = mapped_column(sa.String(512), default="")
+    suite_id: Mapped[str] = mapped_column(sa.String(255), default="", index=True)
     type: Mapped[str] = mapped_column(sa.String(64))
+    status: Mapped[str] = mapped_column(sa.String(32), default="active")
     tags: Mapped[list] = mapped_column(sa.JSON, default=list)
-    domains: Mapped[list] = mapped_column(sa.JSON, default=list)
+    difficulty: Mapped[str] = mapped_column(sa.String(32), default="unknown")
+    flagship: Mapped[bool] = mapped_column(sa.Boolean, default=False)
     contamination: Mapped[str] = mapped_column(sa.String(32))
     freshness: Mapped[str] = mapped_column(sa.String(64))
+    task_path: Mapped[str] = mapped_column(sa.String(1024), default="")  # 相对数据集根的 bundle 路径
     payload: Mapped[dict] = mapped_column(sa.JSON)
 
     installation: Mapped[DatasetInstallation] = relationship(back_populates="tasks")
@@ -207,6 +224,7 @@ class Run(Base):
 
     # 聚合成本与耗时（derived cache，可从 usage_records 重算）
     solver_wall_time_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    verifier_wall_time_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     judge_wall_time_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     total_wall_time_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     solver_cost: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
@@ -250,6 +268,7 @@ class SolverExecution(Base):
 
     run: Mapped[Run] = relationship(back_populates="solver_executions")
     judge_executions: Mapped[list["JudgeExecution"]] = relationship(back_populates="solver_execution")
+    verifier_executions: Mapped[list["VerifierExecution"]] = relationship(back_populates="solver_execution")
 
 
 class JudgeExecution(Base):
@@ -290,6 +309,34 @@ class JudgeExecution(Base):
     error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
     solver_execution: Mapped[SolverExecution] = relationship(back_populates="judge_executions")
+
+
+class VerifierExecution(Base):
+    """一次程序判定（对某个 SolverExecution 执行 verify 契约）。
+
+    facts_json / environment_json / log_tail 为 immutable raw facts：
+    判定输入（task hash、solver response）与输出（测试/对拍结果）一经写入不覆盖。
+    重评（rejudge）复用已有判定事实，不重新执行。
+    """
+
+    __tablename__ = "verifier_executions"
+
+    id: Mapped[str] = mapped_column(sa.String(32), primary_key=True, default=new_id)
+    run_id: Mapped[str] = mapped_column(sa.ForeignKey("runs.id"), index=True)
+    solver_execution_id: Mapped[str] = mapped_column(sa.ForeignKey("solver_executions.id"), index=True)
+    verifier_kind: Mapped[str] = mapped_column(sa.String(32))  # swe_issue / algorithm
+    status: Mapped[str] = mapped_column(sa.String(32), default="running", index=True)
+    # running / completed / failed / unavailable（工具链无法供给时降级）
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    wall_time_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+
+    facts_json: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
+    environment_json: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
+    log_tail: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+
+    solver_execution: Mapped[SolverExecution] = relationship(back_populates="verifier_executions")
 
 
 class UsageRecord(Base):

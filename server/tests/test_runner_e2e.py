@@ -31,7 +31,7 @@ def test_end_to_end_run(client: TestClient, completed_run: dict, mock_setup: dic
 
     # 追溯字段完整冻结
     assert run["framework_version"]
-    assert run["dataset_id"] == "onprs.mock.protocol-sample"
+    assert run["dataset_id"] == "onprs-mock-protocol-sample"
     assert run["dataset_revision"] == "mock-rev-1"
     assert len(run["manifest_hash"]) == 64
 
@@ -81,7 +81,7 @@ def test_judge_anonymization(client: TestClient, completed_run: dict) -> None:
             assert "Mock Provider" not in prompt_text
             # 原始输出必须保存
             assert judge.raw_output_text
-            assert judge.rubric_version == "1.0"
+            assert judge.rubric_version == "1"
 
 
 def test_usage_and_pricing_snapshot_frozen(client: TestClient, completed_run: dict) -> None:

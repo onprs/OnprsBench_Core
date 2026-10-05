@@ -1,26 +1,39 @@
-"""Dataset Protocol 校验测试（framework 侧 loader + 独立校验工具共用语义）。"""
+"""Dataset Protocol 校验测试（bundle 形态：manifest.yaml + task 目录 + 三级 hash）。"""
 
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
-from app.services.datasets import DatasetValidationError, load_manifest, manifest_hash, task_hash
+from app.services.datasets import DatasetValidationError, bundle_sha256, load_manifest, manifest_hash
 
 from .conftest import MOCK_DATASET_DIR
+
+
+def _load_manifest_file(ds: Path) -> dict:
+    return yaml.safe_load((ds / "manifest.yaml").read_text(encoding="utf-8"))
+
+
+def _save_manifest_file(ds: Path, manifest: dict) -> None:
+    (ds / "manifest.yaml").write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
 
 
 def test_mock_sample_passes() -> None:
     manifest, mhash = load_manifest(MOCK_DATASET_DIR)
     assert manifest["protocol_version"] == "1"
+    assert manifest["dataset"]["id"] == "onprs-mock-protocol-sample"
     assert len(mhash) == 64
+    # manifest hash 是文件字节 hash，与内容规范化无关
+    assert mhash == manifest_hash(MOCK_DATASET_DIR / "manifest.yaml")
 
 
 def test_missing_manifest_fails(tmp_path: Path) -> None:
-    with pytest.raises(DatasetValidationError, match="manifest.json"):
+    with pytest.raises(DatasetValidationError, match="manifest.yaml"):
         load_manifest(tmp_path)
 
 
@@ -32,51 +45,51 @@ def _copy_sample(tmp_path: Path) -> Path:
 
 def test_schema_violation_fails(tmp_path: Path) -> None:
     ds = _copy_sample(tmp_path)
-    manifest = json.loads((ds / "manifest.json").read_text(encoding="utf-8"))
-    del manifest["tasks"][0]["judge_visible"]["rubric"]
-    (ds / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    manifest = _load_manifest_file(ds)
+    del manifest["suites"][0]["tasks"][0]["judge_visible"]
+    _save_manifest_file(ds, manifest)
     with pytest.raises(DatasetValidationError) as exc_info:
         load_manifest(ds)
-    assert any("rubric" in e for e in exc_info.value.errors)
+    assert any("judge_visible" in e for e in exc_info.value.errors)
 
 
 def test_unsupported_protocol_version_fails(tmp_path: Path) -> None:
     ds = _copy_sample(tmp_path)
-    manifest = json.loads((ds / "manifest.json").read_text(encoding="utf-8"))
+    manifest = _load_manifest_file(ds)
     manifest["protocol_version"] = "99"
-    (ds / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    _save_manifest_file(ds, manifest)
     with pytest.raises(DatasetValidationError, match="protocol_version"):
         load_manifest(ds)
 
 
-def test_dangling_suite_reference_fails(tmp_path: Path) -> None:
+def test_task_file_hash_mismatch_fails(tmp_path: Path) -> None:
     ds = _copy_sample(tmp_path)
-    manifest = json.loads((ds / "manifest.json").read_text(encoding="utf-8"))
-    manifest["suites"][0]["task_ids"].append("no-such-task")
-    (ds / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-    with pytest.raises(DatasetValidationError, match="不存在的 task"):
-        load_manifest(ds)
-
-
-def test_asset_hash_mismatch_fails(tmp_path: Path) -> None:
-    ds = _copy_sample(tmp_path)
-    asset_path = ds / "assets" / "hint.txt"
-    asset_path.parent.mkdir(exist_ok=True)
-    asset_path.write_text("被篡改的内容", encoding="utf-8")
-
-    manifest = json.loads((ds / "manifest.json").read_text(encoding="utf-8"))
-    manifest["tasks"][0]["solver_visible"]["assets"] = [
-        {"path": "assets/hint.txt", "sha256": "0" * 64, "media_type": "text/plain"}
-    ]
-    (ds / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    problem = ds / "tasks" / "mock-core" / "mock-sum-001" / "problem.md"
+    problem.write_text("被篡改的题面", encoding="utf-8")
     with pytest.raises(DatasetValidationError, match="hash 不匹配"):
         load_manifest(ds)
 
 
-def test_hashes_are_stable_and_sensitive() -> None:
-    manifest, mhash = load_manifest(MOCK_DATASET_DIR)
-    task = manifest["tasks"][0]
-    assert task_hash(task) == task_hash(json.loads(json.dumps(task)))
-    changed = {**task, "revision": task["revision"] + 1}
-    assert task_hash(changed) != task_hash(task)
-    assert manifest_hash(manifest) == mhash
+def test_unregistered_file_fails(tmp_path: Path) -> None:
+    ds = _copy_sample(tmp_path)
+    extra = ds / "tasks" / "mock-core" / "mock-sum-001" / "answer.md"
+    extra.write_text("未登记的文件", encoding="utf-8")
+    with pytest.raises(DatasetValidationError, match="未登记"):
+        load_manifest(ds)
+
+
+def test_duplicate_task_id_fails(tmp_path: Path) -> None:
+    ds = _copy_sample(tmp_path)
+    manifest = _load_manifest_file(ds)
+    duplicated = dict(manifest["suites"][0]["tasks"][0])
+    manifest["suites"][0]["tasks"].append(duplicated)
+    _save_manifest_file(ds, manifest)
+    with pytest.raises(DatasetValidationError, match="重复"):
+        load_manifest(ds)
+
+
+def test_bundle_hash_rule_matches_protocol() -> None:
+    """bundle hash 规则：路径字典序拼接 "<path>  <sha256>" 后再取 SHA-256。"""
+    file_hashes = {"b.txt": "1" * 64, "a.txt": "0" * 64}
+    expected = bundle_sha256({"a.txt": "0" * 64, "b.txt": "1" * 64})
+    assert bundle_sha256(file_hashes) == expected  # 顺序无关

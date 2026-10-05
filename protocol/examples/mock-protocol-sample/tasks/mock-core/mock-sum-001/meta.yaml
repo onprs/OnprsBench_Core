@@ -1,0 +1,43 @@
+id: mock-sum-001
+revision: 1
+title: 两位数加法（协议测试样例）
+suite: mock-core
+type: academic_qa
+tags:
+  - mock
+  - arithmetic
+lifecycle:
+  status: active
+  stage: mature
+  superseded_by: null
+  errata: []
+freshness:
+  class: F0
+  created_at: "2025-01-01"
+  source_published_at: null
+  dataset_release_at: "2025-01-01"
+difficulty:
+  author: easy
+source:
+  kind: synthetic
+  name: 人工编写（协议测试样例）
+  url: null
+  published_at: null
+  license: MIT
+  redistribution: redistributable
+  attribution: OnprsBench contributors
+  upstream_version: null
+  upstream_commit: null
+  adapter: null
+contamination:
+  risk: unknown
+  source_publication_date: null
+  exact_problem_public: false
+  reference_public: false
+  transformation: []
+  notes: 协议测试样例，不构成真实评测数据。
+license: MIT
+authors:
+  - onprs
+flagship: false
+notes: 仅用于验证 Dataset Protocol 加载与端到端流程。

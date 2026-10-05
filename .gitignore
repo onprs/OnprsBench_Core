@@ -53,3 +53,4 @@ logs/
 !.vscode/settings.json
 .DS_Store
 Thumbs.db
+.smoke_data/

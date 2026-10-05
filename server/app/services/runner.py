@@ -1,9 +1,11 @@
-"""Benchmark 编排：Solver 并发执行 → 多 Judge 并行评分。
+"""Benchmark 编排：Solver 并发执行 → 程序判定（verify 契约）→ 多 Judge 并行评分。
 
 不变量：
-- 原始事实（prompt/response/raw usage/pricing snapshot/timestamps）只写一次，绝不覆盖。
+- 原始事实（prompt/response/raw usage/verifier facts/pricing snapshot/timestamps）只写一次，绝不覆盖。
 - Judge 并发执行的总耗时按 wall time 记录，不把各 Judge latency 相加。
-- 重新 Judge 只新增 JudgeExecution，不触碰 Solver 原始记录。
+- 重新 Judge 只新增 JudgeExecution，不触碰 Solver 原始记录与 Verifier 判定事实。
+- 程序判定所需环境由框架自带（toolchain 包）；无法供给时该次判定为 unavailable，
+  Judge 仅依据文本证据评分，不阻塞 Run。
 """
 
 from __future__ import annotations
@@ -11,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import sqlalchemy as sa
 
@@ -29,9 +33,12 @@ from ..models import (
     SolverExecution,
     TaskCache,
     UsageRecord,
+    VerifierExecution,
 )
 from ..runtime.base import ModelRequest
 from ..runtime.factory import build_client
+from ..toolchain import ToolchainUnavailable
+from ..verifier import service as verifier_service
 from . import aggregation, datasets, prompts
 from .pricing import ResolvedPricing, compute_cost, resolve_pricing
 
@@ -196,6 +203,104 @@ async def _run_solver_call(
         return execution_id
 
 
+async def _run_verifier_call(
+    run_id: str,
+    solver_execution_id: str,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """对已完成的 SolverExecution 执行程序判定契约（若有）。结果落库为 VerifierExecution。"""
+    async with semaphore:
+        with session_scope() as session:
+            solver_execution = session.get(SolverExecution, solver_execution_id)
+            task = session.get(TaskCache, solver_execution.task_cache_id)
+            installation = session.get(datasets.DatasetInstallation, task.installation_id)
+            task_payload = task.payload
+            task_dir = Path(installation.source_path) / task.task_path
+            response_text = solver_execution.response_text or ""
+
+        if not verifier_service.has_verify_contract(task_payload):
+            return
+
+        work_dir = settings.verify_workspace_dir / solver_execution_id
+        with session_scope() as session:
+            execution = VerifierExecution(
+                run_id=run_id,
+                solver_execution_id=solver_execution_id,
+                verifier_kind=_verifier_kind(task_payload),
+                status="running",
+                started_at=utcnow(),
+            )
+            session.add(execution)
+            session.flush()
+            execution_id = execution.id
+
+        try:
+            outcome = await asyncio.to_thread(
+                verifier_service.verify_task,
+                task_payload=task_payload,
+                task_dir=task_dir,
+                response_text=response_text,
+                work_dir=work_dir,
+            )
+        except ToolchainUnavailable as exc:
+            logger.warning("工具链无法供给，判定降级 run=%s solver_execution=%s: %s", run_id, solver_execution_id, exc)
+            with session_scope() as session:
+                row = session.get(VerifierExecution, execution_id)
+                row.status = "unavailable"
+                row.finished_at = utcnow()
+                row.error = str(exc)
+            return
+        except Exception as exc:
+            logger.exception("verifier 执行异常 run=%s solver_execution=%s", run_id, solver_execution_id)
+            with session_scope() as session:
+                row = session.get(VerifierExecution, execution_id)
+                row.status = "failed"
+                row.finished_at = utcnow()
+                row.error = str(exc)
+            return
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+        if outcome is None:
+            with session_scope() as session:
+                row = session.get(VerifierExecution, execution_id)
+                row.status = "unavailable"
+                row.finished_at = utcnow()
+                row.error = "verify 契约无法识别"
+            return
+
+        with session_scope() as session:
+            row = session.get(VerifierExecution, execution_id)
+            row.status = outcome.status
+            row.finished_at = utcnow()
+            row.wall_time_s = outcome.facts.get("wall_time_s")
+            row.facts_json = outcome.facts
+            row.environment_json = outcome.environment
+            row.log_tail = outcome.log_tail
+            row.error = outcome.error
+
+
+def _verifier_kind(task_payload: dict) -> str:
+    verify = task_payload.get("verify") or {}
+    evaluation = verify.get("evaluation") or {}
+    if verify.get("base_commit") and evaluation.get("fail_to_pass") is not None:
+        return "swe_issue"
+    return "algorithm"
+
+
+def _latest_verifier_facts(session, solver_execution_id: str) -> dict | None:
+    """取该 solver execution 最近一次 completed 判定事实（rejudge 时复用，不重跑）。"""
+    row = session.scalars(
+        sa.select(VerifierExecution)
+        .where(
+            VerifierExecution.solver_execution_id == solver_execution_id,
+            VerifierExecution.status == "completed",
+        )
+        .order_by(VerifierExecution.started_at.desc())
+    ).first()
+    return row.facts_json if row else None
+
+
 async def _run_judge_call(
     run_id: str,
     spec: TargetSpec,
@@ -211,7 +316,8 @@ async def _run_judge_call(
             task_payload = task.payload
             candidate = solver_execution.response_text or ""
             rubric = task_payload["judge_visible"]["rubric"]
-            messages = prompts.build_judge_messages(task_payload, candidate)
+            verifier_facts = _latest_verifier_facts(session, solver_execution_id)
+            messages = prompts.build_judge_messages(task_payload, candidate, verifier_facts)
 
             execution = JudgeExecution(
                 run_id=run_id,
@@ -340,9 +446,9 @@ async def _execute_run(run_id: str) -> None:
         )
         solver_wall = time.perf_counter() - solver_t0
 
-        # Judge 阶段：同一 solver execution 的全部 judge 并行，全局信号量限流
-        judge_t0 = time.perf_counter()
-        judge_sem = asyncio.Semaphore(settings.solver_concurrency * 2)
+        # 程序判定阶段：对已完成 solver 执行 verify 契约（子进程密集，单独限流）
+        verifier_t0 = time.perf_counter()
+        verifier_sem = asyncio.Semaphore(settings.verifier_concurrency)
         with session_scope() as session:
             completed_ids = [
                 row.id
@@ -353,6 +459,14 @@ async def _execute_run(run_id: str) -> None:
                     )
                 )
             ]
+        await asyncio.gather(
+            *(_run_verifier_call(run_id, se_id, verifier_sem) for se_id in completed_ids)
+        )
+        verifier_wall = time.perf_counter() - verifier_t0
+
+        # Judge 阶段：同一 solver execution 的全部 judge 并行，全局信号量限流
+        judge_t0 = time.perf_counter()
+        judge_sem = asyncio.Semaphore(settings.solver_concurrency * 2)
         await asyncio.gather(
             *(
                 _run_judge_call(run_id, judge_spec, se_id, pricing, judge_sem)
@@ -367,6 +481,7 @@ async def _execute_run(run_id: str) -> None:
             run.status = "completed"
             run.finished_at = utcnow()
             run.solver_wall_time_s = solver_wall
+            run.verifier_wall_time_s = verifier_wall
             run.judge_wall_time_s = judge_wall
             run.total_wall_time_s = time.perf_counter() - run_t0
             _recompute_run_costs(session, run_id)

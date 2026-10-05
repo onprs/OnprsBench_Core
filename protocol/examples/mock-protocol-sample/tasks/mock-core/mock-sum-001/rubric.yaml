@@ -1,0 +1,22 @@
+rubric_version: 1
+dimensions:
+  - id: correctness
+    weight: 0.70
+    description: 最终答案是否为 42。答案错误属于致命错误（fatal_error=true）。
+    anchors:
+      - score: 0.0
+        description: 最终答案不是 42。
+      - score: 0.5
+        description: 答案为 42 但表述含糊，或过程中有明显笔误。
+      - score: 1.0
+        description: 明确给出 42。
+  - id: explanation
+    weight: 0.30
+    description: 是否给出合理的计算过程。
+    anchors:
+      - score: 0.0
+        description: 没有任何过程。
+      - score: 0.5
+        description: 有过程但不完整或含小错。
+      - score: 1.0
+        description: 过程清晰正确（如分步进位、拆整十）。

@@ -30,7 +30,14 @@ def installation_dict(inst: DatasetInstallation) -> dict:
         "capabilities": inst.capabilities,
         "installed_at": inst.installed_at,
         "suites": [
-            {"id": s["id"], "name": s["name"], "task_count": len(s["task_ids"])} for s in inst.suites
+            {
+                "id": s["id"],
+                "name": s["name"],
+                "layer": s.get("layer"),
+                "adapter": s.get("adapter"),
+                "task_count": len(s.get("task_ids") or []),
+            }
+            for s in inst.suites
         ],
     }
 
@@ -97,14 +104,18 @@ def list_tasks(installation_id: str, suite_id: str | None = None, db: Session = 
             "task_id": t.task_id,
             "revision": t.revision,
             "task_hash": t.task_hash,
+            "title": t.title,
             "type": t.type,
+            "status": t.status,
             "tags": t.tags,
-            "domains": t.domains,
+            "difficulty": t.difficulty,
+            "flagship": t.flagship,
             "contamination": t.contamination,
             "freshness": t.freshness,
+            "has_verify_contract": t.payload.get("verify") is not None,
             "problem": t.payload["solver_visible"]["problem"],
             "rubric_dimensions": [
-                {"id": d["id"], "max_score": d["max_score"]}
+                {"id": d["id"], "weight": d["weight"]}
                 for d in t.payload["judge_visible"]["rubric"]["dimensions"]
             ],
         }
