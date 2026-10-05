@@ -1,0 +1,3 @@
+# Dataset Protocol 的内容 hash 按文件原始字节计算（协议第 5 节），
+# 换行符转换会破坏 hash 稳定性。协议相关文件禁止文本规范化。
+protocol/** -text
