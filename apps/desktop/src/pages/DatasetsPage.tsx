@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
 import { fmtTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { HelpTip } from "@/components/HelpTip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -66,7 +67,10 @@ export function DatasetsPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1">
-            <Label>数据集目录（需包含符合 Dataset Protocol 的 manifest.json）</Label>
+            <Label>
+              数据集目录
+              <HelpTip text="需包含符合 Dataset Protocol 的 manifest.json；安装前会做完整校验" />
+            </Label>
             <div className="flex gap-2">
               <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/dataset" className="font-mono" />
               <Button onClick={install} disabled={!path}>

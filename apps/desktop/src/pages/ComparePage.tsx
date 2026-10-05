@@ -3,7 +3,8 @@ import { api, type ComparabilityVerdict, type Run, type RunResults } from "@/lib
 import { fmtCost, fmtScore, fmtSeconds, fmtTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpTip } from "@/components/HelpTip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EChart } from "@/components/EChart";
@@ -128,8 +129,10 @@ export function ComparePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>选择要对比的 Run</CardTitle>
-          <CardDescription>跨 Run 比较前会先判定可比性（数据集版本、修订、task revision、框架版本）</CardDescription>
+          <CardTitle className="flex items-center gap-1.5">
+            选择要对比的 Run
+            <HelpTip text="跨 Run 比较前会判定可比性：数据集版本、修订、task revision、框架版本须一致" />
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {runs.length === 0 && <p className="text-sm text-muted-foreground">暂无已完成的 Run</p>}

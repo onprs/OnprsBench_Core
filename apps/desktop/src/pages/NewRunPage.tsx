@@ -8,7 +8,8 @@ import {
   type TargetSpecIn,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpTip } from "@/components/HelpTip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,13 +49,13 @@ function buildTargetOptions(deployments: Deployment[], profiles: ReasoningProfil
 
 function TargetPicker({
   title,
-  description,
+  tip,
   options,
   selected,
   onToggle,
 }: {
   title: string;
-  description: string;
+  tip: string;
   options: TargetOption[];
   selected: Set<string>;
   onToggle: (key: string) => void;
@@ -62,8 +63,10 @@ function TargetPicker({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        <CardTitle className="flex items-center gap-1.5">
+          {title}
+          <HelpTip text={tip} />
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         {options.length === 0 && <p className="text-sm text-muted-foreground">请先在「设置」中创建 Deployment</p>}
@@ -190,14 +193,14 @@ export function NewRunPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <TargetPicker
           title="Solver"
-          description="被评测的 Evaluation Target（Deployment × Reasoning Profile），可多选"
+          tip="被评测的 Evaluation Target（Deployment × Reasoning Profile），可多选"
           options={options}
           selected={solverKeys}
           onToggle={(k) => toggle(solverKeys, k, setSolverKeys)}
         />
         <TargetPicker
           title="Judge"
-          description="评分者，并行运行，输入中对 Solver 身份匿名化"
+          tip="评分者，并行运行；输入中对 Solver 身份匿名化"
           options={options}
           selected={judgeKeys}
           onToggle={(k) => toggle(judgeKeys, k, setJudgeKeys)}

@@ -4,7 +4,8 @@ import { createColumnHelper, flexRender, getCoreRowModel, useReactTable } from "
 import { api, type Run, type TimeseriesPoint } from "@/lib/api";
 import { fmtCost, fmtSeconds, fmtTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpTip } from "@/components/HelpTip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EChart } from "@/components/EChart";
 
@@ -122,8 +123,10 @@ export function HistoryPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Score over Time</CardTitle>
-          <CardDescription>同一 Evaluation Target 跨 Run 的得分变化，用于发现能力漂移</CardDescription>
+          <CardTitle className="flex items-center gap-1.5">
+            Score over Time
+            <HelpTip text="同一 Evaluation Target 跨 Run 的得分变化，用于发现能力漂移" />
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {points.length === 0 ? (

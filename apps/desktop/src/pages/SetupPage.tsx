@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { HelpTip } from "@/components/HelpTip";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -185,7 +186,10 @@ function ProvidersTab({
           </div>
           {type !== "mock" && (
             <div className="space-y-1">
-              <Label>API Key（存入系统安全存储，不写入数据库；也可创建后再补）</Label>
+              <Label>
+                API Key
+                <HelpTip text="存入系统安全存储，不写入数据库；也可创建后再补" />
+              </Label>
               <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
           )}
@@ -240,8 +244,10 @@ function ProvidersTab({
       <Dialog open={remoteModels !== null} onOpenChange={(open) => !open && setRemoteModels(null)}>
         <DialogContent className="max-h-[80vh] overflow-auto">
           <DialogHeader>
-            <DialogTitle>从 {remoteModels?.provider.name} 获取的模型</DialogTitle>
-            <DialogDescription>选择一个模型创建 Deployment（同时自动建立 canonical Model）</DialogDescription>
+            <DialogTitle className="flex items-center gap-1.5">
+              从 {remoteModels?.provider.name} 获取的模型
+              <HelpTip text="选择一个模型创建 Deployment（同时自动建立 canonical Model）" />
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-1">
             {remoteModels?.models.map((m) => (
@@ -323,7 +329,10 @@ function ProviderEditDialog({
           </div>
           {provider?.type !== "mock" && (
             <div className="space-y-1">
-              <Label>新 API Key（留空则保持不变）</Label>
+              <Label>
+                新 API Key
+                <HelpTip text="留空则保持不变；输入新值则替换已保存的凭据" />
+              </Label>
               <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
           )}
@@ -478,11 +487,17 @@ function DeploymentsTab({
             <Input value={apiModelName} onChange={(e) => setApiModelName(e.target.value)} placeholder="例如：gpt-4o" />
           </div>
           <div className="space-y-1">
-            <Label>输入价 override（$/M tokens）</Label>
+            <Label>
+              输入价（$/M tokens）
+              <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+            </Label>
             <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="可选" />
           </div>
           <div className="space-y-1">
-            <Label>输出价 override（$/M tokens）</Label>
+            <Label>
+              输出价（$/M tokens）
+              <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+            </Label>
             <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
           </div>
           <div className="lg:col-span-3">
@@ -562,8 +577,10 @@ function DeploymentsTab({
       <Dialog open={profileFor !== null} onOpenChange={(open) => !open && setProfileFor(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建 Reasoning Profile</DialogTitle>
-            <DialogDescription>同一 Deployment 的不同思考强度是独立的评测配置</DialogDescription>
+            <DialogTitle className="flex items-center gap-1.5">
+              新建 Reasoning Profile
+              <HelpTip text="同一 Deployment 的不同思考强度是独立的评测配置" />
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1">
@@ -655,11 +672,17 @@ function DeploymentEditDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <Label>输入价 override（$/M tokens）</Label>
+              <Label>
+                输入价（$/M tokens）
+                <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+              </Label>
               <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="可选" />
             </div>
             <div className="space-y-1">
-              <Label>输出价 override（$/M tokens）</Label>
+              <Label>
+                输出价（$/M tokens）
+                <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+              </Label>
               <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
             </div>
           </div>
