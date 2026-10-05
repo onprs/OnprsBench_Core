@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { api, type Deployment, type ModelInfo, type Provider, type ProviderType, type ReasoningProfile } from "@/lib/api";
-import { fmtTime } from "@/lib/utils";
+import { cn, fmtTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -59,7 +59,7 @@ export function SetupPage() {
           <TabsTrigger value="deployments">Deployment</TabsTrigger>
         </TabsList>
         <TabsContent value="providers">
-          <ProvidersTab providerTypes={providerTypes} providers={providers} onChanged={reload} />
+          <ProvidersTab providerTypes={providerTypes} providers={providers} deployments={deployments} onChanged={reload} />
         </TabsContent>
         <TabsContent value="deployments">
           <DeploymentsTab
@@ -82,10 +82,12 @@ export function SetupPage() {
 function ProvidersTab({
   providerTypes,
   providers,
+  deployments,
   onChanged,
 }: {
   providerTypes: ProviderType[];
   providers: Provider[];
+  deployments: Deployment[];
   onChanged: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
@@ -94,8 +96,13 @@ function ProvidersTab({
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [remoteModels, setRemoteModels] = useState<{ provider: Provider; models: string[] } | null>(null);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  // 拉取模型面板：页内右侧滑出，models 为 null 表示加载中
+  const [modelsPanel, setModelsPanel] = useState<{
+    provider: Provider;
+    models: string[] | null;
+    error: string | null;
+  } | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
 
   const selectedType = providerTypes.find((t) => t.type === type);
@@ -119,12 +126,13 @@ function ProvidersTab({
   }
 
   async function fetchModels(provider: Provider) {
-    setFetchError(null);
+    setModelsPanel({ provider, models: null, error: null });
+    setPanelOpen(true);
     try {
       const data = await api.get<{ models: string[] }>(`/api/providers/${provider.id}/models`);
-      setRemoteModels({ provider, models: data.models });
+      setModelsPanel({ provider, models: data.models, error: null });
     } catch (e) {
-      setFetchError(e instanceof Error ? e.message : String(e));
+      setModelsPanel({ provider, models: null, error: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -155,7 +163,8 @@ function ProvidersTab({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex items-start gap-4">
+      <div className="grid min-w-0 flex-1 gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle>添加 Provider</CardTitle>
@@ -205,7 +214,7 @@ function ProvidersTab({
           <CardTitle>已有 Provider</CardTitle>
         </CardHeader>
         <CardContent>
-          <ErrorText error={fetchError ?? listError} />
+          <ErrorText error={listError} />
           <Table>
             <TableHeader>
               <TableRow>
@@ -218,12 +227,20 @@ function ProvidersTab({
             <TableBody>
               {providers.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell>{p.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">{p.name}</TableCell>
                   <TableCell>{p.type}</TableCell>
-                  <TableCell>{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
+                  <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      <Button size="sm" variant="outline" onClick={() => fetchModels(p)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => fetchModels(p)}
+                        disabled={panelOpen && modelsPanel?.provider.id === p.id && modelsPanel.models === null && !modelsPanel.error}
+                      >
+                        {panelOpen && modelsPanel?.provider.id === p.id && modelsPanel.models === null && !modelsPanel.error ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : null}
                         拉取模型
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => setEditing(p)}>
@@ -241,35 +258,71 @@ function ProvidersTab({
         </CardContent>
       </Card>
 
-      <Dialog open={remoteModels !== null} onOpenChange={(open) => !open && setRemoteModels(null)}>
-        <DialogContent className="max-h-[80vh] overflow-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-1.5">
-              从 {remoteModels?.provider.name} 获取的模型
-              <HelpTip text="选择一个模型创建 Deployment（同时自动建立 canonical Model）" />
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-1">
-            {remoteModels?.models.map((m) => (
-              <div key={m} className="flex items-center justify-between rounded border px-3 py-1.5 text-sm">
-                <span className="font-mono">{m}</span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={async () => {
-                    await addDeploymentFromRemote(remoteModels.provider, m);
-                    setRemoteModels(null);
-                  }}
-                >
-                  添加
-                </Button>
-              </div>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       <ProviderEditDialog provider={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
+      </div>
+
+      {/* 页内右侧面板：随宽度过渡动画滑出，无遮罩叠层 */}
+      <div
+        className={cn(
+          "shrink-0 overflow-hidden transition-all duration-300 ease-in-out",
+          panelOpen ? "w-[360px] opacity-100" : "w-0 opacity-0"
+        )}
+      >
+        <div className="w-[360px]">
+          <Card>
+            <CardHeader className="flex-row items-start justify-between space-y-0">
+              <CardTitle className="flex items-center gap-1.5 text-base">
+                从 {modelsPanel?.provider.name} 获取的模型
+                <HelpTip text="选择一个模型创建 Deployment（同时自动建立 canonical Model）" />
+              </CardTitle>
+              <Button size="icon" variant="ghost" onClick={() => setPanelOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {modelsPanel && modelsPanel.models === null && !modelsPanel.error && (
+                <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <span className="text-sm">正在拉取模型列表…</span>
+                </div>
+              )}
+              {modelsPanel?.error && (
+                <div className="flex h-40 flex-col items-center justify-center gap-3">
+                  <p className="text-sm text-destructive">{modelsPanel.error}</p>
+                  <Button size="sm" variant="outline" onClick={() => fetchModels(modelsPanel.provider)}>
+                    重试
+                  </Button>
+                </div>
+              )}
+              {modelsPanel?.models && (
+                <div className="max-h-[60vh] space-y-1 overflow-auto">
+                  {modelsPanel.models.length === 0 && (
+                    <p className="text-sm text-muted-foreground">该 Provider 未返回任何模型</p>
+                  )}
+                  {modelsPanel.models.map((m) => {
+                    const added = deployments.some(
+                      (d) => d.provider_id === modelsPanel.provider.id && d.api_model_name === m
+                    );
+                    return (
+                      <div key={m} className="flex items-center justify-between rounded border px-3 py-1.5 text-sm">
+                        <span className="font-mono">{m}</span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={added}
+                          onClick={() => addDeploymentFromRemote(modelsPanel.provider, m)}
+                        >
+                          {added ? "已添加" : "添加"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

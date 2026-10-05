@@ -12,7 +12,7 @@ export function HelpTip({ text, className }: { text: string; className?: string 
             type="button"
             tabIndex={-1}
             className={cn(
-              "inline-flex items-center text-muted-foreground/60 transition-colors hover:text-muted-foreground",
+              "ml-1 inline-flex translate-y-px items-center text-muted-foreground/60 transition-colors hover:text-muted-foreground",
               className
             )}
           >
