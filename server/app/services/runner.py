@@ -378,6 +378,13 @@ async def _execute_run(run_id: str) -> None:
             len(completed_ids) * len(judges),
             time.perf_counter() - run_t0,
         )
+    except asyncio.CancelledError:
+        logger.info("run 被取消 id=%s", run_id)
+        with session_scope() as session:
+            run = session.get(Run, run_id)
+            run.status = "cancelled"
+            run.finished_at = utcnow()
+            _cancel_running_executions(session, run_id)
     except Exception as exc:
         logger.exception("run 失败 id=%s", run_id)
         with session_scope() as session:
@@ -387,27 +394,46 @@ async def _execute_run(run_id: str) -> None:
             run.error = str(exc)
 
 
+def _cancel_running_executions(session, run_id: str) -> None:
+    """把该 Run 下仍处于 running/pending 的执行记录置为 cancelled。"""
+    for model_cls in (SolverExecution, JudgeExecution):
+        rows = session.scalars(
+            sa.select(model_cls).where(
+                model_cls.run_id == run_id,
+                model_cls.status.in_(["pending", "running"]),
+            )
+        ).all()
+        for row in rows:
+            row.status = "cancelled"
+            row.finished_at = utcnow()
+
+
 async def _execute_rejudge(run_id: str, solver_execution_ids: list[str], judge_entries: list[dict]) -> None:
     """对历史 Solver 回答重新评分：只新增 JudgeExecution，不动 Solver 原始记录。"""
-    with session_scope() as session:
-        run = session.get(Run, run_id)
-        snapshot_payload = {"judges": judge_entries}
-        judges = _load_target_specs(session, snapshot_payload, "judges")
+    try:
+        with session_scope() as session:
+            run = session.get(Run, run_id)
+            snapshot_payload = {"judges": judge_entries}
+            judges = _load_target_specs(session, snapshot_payload, "judges")
 
-    pricing = PricingRegistry()
-    for spec in judges:
-        pricing.ensure(spec)
+        pricing = PricingRegistry()
+        for spec in judges:
+            pricing.ensure(spec)
 
-    judge_sem = asyncio.Semaphore(settings.solver_concurrency * 2)
-    await asyncio.gather(
-        *(
-            _run_judge_call(run_id, judge_spec, se_id, pricing, judge_sem)
-            for se_id in solver_execution_ids
-            for judge_spec in judges
+        judge_sem = asyncio.Semaphore(settings.solver_concurrency * 2)
+        await asyncio.gather(
+            *(
+                _run_judge_call(run_id, judge_spec, se_id, pricing, judge_sem)
+                for se_id in solver_execution_ids
+                for judge_spec in judges
+            )
         )
-    )
-    with session_scope() as session:
-        _recompute_run_costs(session, run_id)
+        with session_scope() as session:
+            _recompute_run_costs(session, run_id)
+    except asyncio.CancelledError:
+        logger.info("rejudge 被取消 run=%s", run_id)
+        with session_scope() as session:
+            _cancel_running_executions(session, run_id)
 
 
 def run_snapshot_payload(session, run: Run) -> dict:
@@ -430,6 +456,13 @@ class RunManager:
     def is_active(self, run_id: str) -> bool:
         task = self._tasks.get(run_id)
         return task is not None and not task.done()
+
+    def cancel(self, run_id: str) -> bool:
+        """请求取消正在执行的任务。返回是否成功发出取消。"""
+        task = self._tasks.get(run_id)
+        if task is None or task.done():
+            return False
+        return task.cancel()
 
     def _submit(self, run_id: str, coro) -> None:
         if self.is_active(run_id):

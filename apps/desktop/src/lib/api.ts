@@ -132,7 +132,7 @@ export interface TargetSpecIn {
 export interface Run {
   id: string;
   name: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   framework_version: string;
   framework_commit: string;
   dataset_id: string;

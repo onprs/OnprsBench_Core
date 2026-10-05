@@ -21,15 +21,34 @@ if (!fs.existsSync(venvPython)) {
   pythonCmd = "python";
 }
 
-const server = spawn(pythonCmd, ["-m", "app.main"], { cwd: serverDir, stdio: "inherit" });
+const server = await spawnServer();
 const vite = spawn("pnpm dev", {
   cwd: desktopDir,
   stdio: "inherit",
   shell: true,
 });
 
+/** 若 8765 已有健康 sidecar（如上次运行残留），直接复用，避免多实例写同一数据库。 */
+async function spawnServer() {
+  try {
+    const resp = await fetch("http://127.0.0.1:8765/api/meta", { signal: AbortSignal.timeout(2000) });
+    if (resp.ok) {
+      console.log("[dev] 检测到已有 sidecar 在 127.0.0.1:8765 运行，直接复用");
+      return null;
+    }
+  } catch {
+    // 没有可复用的 sidecar，正常启动
+  }
+  const child = spawn(pythonCmd, ["-m", "app.main"], { cwd: serverDir, stdio: "inherit" });
+  child.on("exit", (code) => {
+    console.error(`[dev] python sidecar 退出（code=${code}）`);
+    shutdown();
+  });
+  return child;
+}
+
 function shutdown() {
-  server.kill();
+  server?.kill();
   vite.kill();
   process.exit(0);
 }
@@ -37,7 +56,3 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 vite.on("exit", shutdown);
-server.on("exit", (code) => {
-  console.error(`[dev] python sidecar 退出（code=${code}）`);
-  shutdown();
-});

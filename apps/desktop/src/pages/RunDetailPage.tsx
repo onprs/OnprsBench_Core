@@ -14,6 +14,7 @@ const STATUS_BADGE: Record<string, { label: string; variant: "secondary" | "succ
   running: { label: "运行中", variant: "warning" },
   completed: { label: "已完成", variant: "success" },
   failed: { label: "失败", variant: "destructive" },
+  cancelled: { label: "已取消", variant: "secondary" },
 };
 
 const targetColumnHelper = createColumnHelper<TargetSummary>();
@@ -105,6 +106,17 @@ export function RunDetailPage() {
     }
   }
 
+  async function cancel() {
+    if (!runId) return;
+    setError(null);
+    try {
+      await api.post(`/api/runs/${runId}/cancel`);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!run) return <p className="text-muted-foreground">加载中…</p>;
 
@@ -122,6 +134,11 @@ export function RunDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <Badge variant={status.variant}>{status.label}</Badge>
+          {(run.status === "pending" || run.status === "running") && (
+            <Button variant="destructive" onClick={cancel}>
+              取消
+            </Button>
+          )}
           <Button variant="outline" onClick={rejudge} disabled={run.status !== "completed"}>
             重新评分
           </Button>

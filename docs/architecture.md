@@ -96,6 +96,7 @@ uvicorn 单进程；`RunManager` 在 FastAPI lifespan 捕获主事件循环，�
 
 当前为开发模式：`tauri dev` 的 `beforeDevCommand` 运行 `scripts/dev.mjs`，
 同时拉起 Python sidecar（优先 `server/.venv`）与 Vite dev server。
+若 8765 端口已有健康 sidecar 则直接复用，避免多实例写同一 SQLite。
 前端冷启动有 `BackendGate` 轮询 `/api/meta`，避免 sidecar 未就绪导致的竞态报错。
 
 正式发布打包（PyInstaller 单文件 sidecar + Tauri bundle externalBin）属于 Roadmap，
@@ -117,6 +118,9 @@ uvicorn 单进程；`RunManager` 在 FastAPI lifespan 捕获主事件循环，�
 |---|---|
 | `GET /api/meta` | 框架版本、commit、支持的协议版本 |
 | `GET/POST/PATCH/DELETE /api/providers` | Provider 管理（api_key write-only） |
+| `GET/POST/PATCH/DELETE /api/deployments` | Deployment；被历史 Run 引用时禁止删除（409） |
+| `GET/POST/DELETE /api/reasoning-profiles` | Reasoning Profile；被引用时禁止删除（409） |
+| `DELETE /api/datasets/installations/{id}` | 卸载数据集；被 Run 引用时禁止（409） |
 | `GET /api/provider-types` | 内置 provider 类型与默认值 |
 | `GET /api/providers/{id}/models` | 从 provider 拉取模型列表（尽力而为） |
 | `GET/POST /api/models` | canonical Model |
@@ -126,6 +130,7 @@ uvicorn 单进程；`RunManager` 在 FastAPI lifespan 捕获主事件循环，�
 | `GET /api/datasets/installations[/...]` | 浏览安装与题目 |
 | `POST /api/runs` | 创建并启动 Run（冻结 config snapshot） |
 | `GET /api/runs[/{id}]` | Run 列表/详情（含成本、耗时、计数） |
+| `POST /api/runs/{id}/cancel` | 取消运行中的 Run（进行中的执行记录置为 cancelled） |
 | `GET /api/runs/{id}/results` | 结果视图：target 汇总 + 逐题明细 + judge 分歧 |
 | `GET /api/runs/{id}/usage` | 逐次调用 usage + pricing snapshot |
 | `GET /api/runs/{id}/config-snapshot` | 冻结配置 |

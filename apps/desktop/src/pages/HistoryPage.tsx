@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<string, string> = {
   running: "运行中",
   completed: "已完成",
   failed: "失败",
+  cancelled: "已取消",
 };
 
 export function HistoryPage() {

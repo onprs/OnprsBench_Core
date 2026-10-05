@@ -44,6 +44,18 @@ export function DatasetsPage() {
     setTasks(await api.get<DatasetTask[]>(`/api/datasets/installations/${installationId}/tasks`));
   }
 
+  async function uninstall(inst: DatasetInstallation) {
+    if (!window.confirm(`卸载数据集「${inst.dataset_name} v${inst.dataset_version}」？`)) return;
+    setError(null);
+    try {
+      await api.delete(`/api/datasets/installations/${inst.id}`);
+      if (selected === inst.id) setSelected(null);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-bold">数据集</h1>
@@ -105,9 +117,14 @@ export function DatasetsPage() {
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{fmtTime(inst.installed_at)}</TableCell>
                   <TableCell>
-                    <Button size="sm" variant="outline" onClick={() => showTasks(inst.id)}>
-                      查看题目
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" onClick={() => showTasks(inst.id)}>
+                        查看题目
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => uninstall(inst)}>
+                        卸载
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

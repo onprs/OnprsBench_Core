@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { api, type Deployment, type ModelInfo, type Provider, type ProviderType, type ReasoningProfile } from "@/lib/api";
 import { fmtTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -91,8 +92,10 @@ function ProvidersTab({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [remoteModels, setRemoteModels] = useState<{ provider: Provider; models: string[] } | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Provider | null>(null);
 
   const selectedType = providerTypes.find((t) => t.type === type);
 
@@ -121,6 +124,17 @@ function ProvidersTab({
       setRemoteModels({ provider, models: data.models });
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function deleteProvider(provider: Provider) {
+    if (!window.confirm(`删除 Provider「${provider.name}」？其 API Key 会一并从系统安全存储移除。`)) return;
+    setListError(null);
+    try {
+      await api.delete(`/api/providers/${provider.id}`);
+      await onChanged();
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -169,9 +183,9 @@ function ProvidersTab({
             <Label>Base URL{selectedType?.base_url ? `（默认 ${selectedType.base_url}）` : ""}</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="可选" />
           </div>
-          {selectedType?.needs_key !== false && type !== "mock" && (
+          {type !== "mock" && (
             <div className="space-y-1">
-              <Label>API Key（存入系统安全存储，不入库）</Label>
+              <Label>API Key（存入系统安全存储，不写入数据库；也可创建后再补）</Label>
               <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
           )}
@@ -187,14 +201,14 @@ function ProvidersTab({
           <CardTitle>已有 Provider</CardTitle>
         </CardHeader>
         <CardContent>
-          <ErrorText error={fetchError} />
+          <ErrorText error={fetchError ?? listError} />
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
                 <TableHead>类型</TableHead>
                 <TableHead>凭据</TableHead>
-                <TableHead></TableHead>
+                <TableHead className="w-[220px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -202,11 +216,19 @@ function ProvidersTab({
                 <TableRow key={p.id}>
                   <TableCell>{p.name}</TableCell>
                   <TableCell>{p.type}</TableCell>
-                  <TableCell>{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">无</Badge>}</TableCell>
+                  <TableCell>{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
                   <TableCell>
-                    <Button size="sm" variant="outline" onClick={() => fetchModels(p)}>
-                      拉取模型
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" onClick={() => fetchModels(p)}>
+                        拉取模型
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditing(p)}>
+                        编辑
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => deleteProvider(p)}>
+                        删除
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -240,7 +262,78 @@ function ProvidersTab({
           </div>
         </DialogContent>
       </Dialog>
+
+      <ProviderEditDialog provider={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
     </div>
+  );
+}
+
+function ProviderEditDialog({
+  provider,
+  onClose,
+  onSaved,
+}: {
+  provider: Provider | null;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(provider?.name ?? "");
+    setBaseUrl(provider?.base_url ?? "");
+    setApiKey("");
+    setError(null);
+  }, [provider]);
+
+  async function save() {
+    if (!provider) return;
+    setError(null);
+    try {
+      await api.patch(`/api/providers/${provider.id}`, {
+        name: name || undefined,
+        base_url: baseUrl || undefined,
+        api_key: apiKey || undefined,
+      });
+      onClose();
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <Dialog open={provider !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑 Provider</DialogTitle>
+          <DialogDescription>凭据状态：{provider?.has_credential ? "已保存 API Key" : "未设置 API Key"}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label>名称</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>Base URL</Label>
+            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="可选" />
+          </div>
+          {provider?.type !== "mock" && (
+            <div className="space-y-1">
+              <Label>新 API Key（留空则保持不变）</Label>
+              <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+            </div>
+          )}
+          <ErrorText error={error} />
+          <Button onClick={save} disabled={!name}>
+            保存
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -268,11 +361,13 @@ function DeploymentsTab({
   const [priceIn, setPriceIn] = useState("");
   const [priceOut, setPriceOut] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
 
   const [profileFor, setProfileFor] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("");
   const [profileEffort, setProfileEffort] = useState("");
   const [profileTemp, setProfileTemp] = useState("");
+  const [editing, setEditing] = useState<Deployment | null>(null);
 
   async function createDeployment() {
     setError(null);
@@ -292,6 +387,28 @@ function DeploymentsTab({
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function deleteDeployment(d: Deployment) {
+    if (!window.confirm(`删除 Deployment「${d.name}」？`)) return;
+    setListError(null);
+    try {
+      await api.delete(`/api/deployments/${d.id}`);
+      await onChanged();
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function deleteProfile(p: ReasoningProfile) {
+    if (!window.confirm(`删除 Reasoning Profile「${p.name}」？`)) return;
+    setListError(null);
+    try {
+      await api.delete(`/api/reasoning-profiles/${p.id}`);
+      await onChanged();
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -382,6 +499,7 @@ function DeploymentsTab({
           <CardTitle>Deployment 列表</CardTitle>
         </CardHeader>
         <CardContent>
+          <ErrorText error={listError} />
           <Table>
             <TableHeader>
               <TableRow>
@@ -391,7 +509,7 @@ function DeploymentsTab({
                 <TableHead>API 模型名</TableHead>
                 <TableHead>Reasoning Profiles</TableHead>
                 <TableHead>创建时间</TableHead>
-                <TableHead></TableHead>
+                <TableHead className="w-[190px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -406,17 +524,33 @@ function DeploymentsTab({
                       {profiles
                         .filter((p) => p.deployment_id === d.id)
                         .map((p) => (
-                          <Badge key={p.id} variant="secondary">
+                          <Badge key={p.id} variant="secondary" className="gap-1">
                             {p.name}
+                            <button
+                              type="button"
+                              className="opacity-60 hover:opacity-100"
+                              onClick={() => deleteProfile(p)}
+                              title="删除该 profile"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
                           </Badge>
                         ))}
                     </div>
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{fmtTime(d.created_at)}</TableCell>
                   <TableCell>
-                    <Button size="sm" variant="outline" onClick={() => setProfileFor(d.id)}>
-                      + Profile
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" onClick={() => setProfileFor(d.id)}>
+                        + Profile
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditing(d)}>
+                        编辑
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={() => deleteDeployment(d)}>
+                        删除
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -450,6 +584,91 @@ function DeploymentsTab({
           </div>
         </DialogContent>
       </Dialog>
+
+      <DeploymentEditDialog deployment={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
     </div>
+  );
+}
+
+function DeploymentEditDialog({
+  deployment,
+  onClose,
+  onSaved,
+}: {
+  deployment: Deployment | null;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [apiModelName, setApiModelName] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [priceIn, setPriceIn] = useState("");
+  const [priceOut, setPriceOut] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(deployment?.name ?? "");
+    setApiModelName(deployment?.api_model_name ?? "");
+    setEndpoint(deployment?.endpoint_override ?? "");
+    setPriceIn(deployment?.price_input_per_mtok?.toString() ?? "");
+    setPriceOut(deployment?.price_output_per_mtok?.toString() ?? "");
+    setError(null);
+  }, [deployment]);
+
+  async function save() {
+    if (!deployment) return;
+    setError(null);
+    try {
+      await api.patch(`/api/deployments/${deployment.id}`, {
+        name: name || undefined,
+        api_model_name: apiModelName || undefined,
+        endpoint_override: endpoint || null,
+        price_input_per_mtok: priceIn ? Number(priceIn) : null,
+        price_output_per_mtok: priceOut ? Number(priceOut) : null,
+      });
+      onClose();
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <Dialog open={deployment !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑 Deployment</DialogTitle>
+          <DialogDescription>{deployment?.model_display_name} · {deployment?.provider_name}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label>名称</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>API 模型名</Label>
+            <Input value={apiModelName} onChange={(e) => setApiModelName(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>Endpoint override</Label>
+            <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="可选" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>输入价 override（$/M tokens）</Label>
+              <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="可选" />
+            </div>
+            <div className="space-y-1">
+              <Label>输出价 override（$/M tokens）</Label>
+              <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
+            </div>
+          </div>
+          <ErrorText error={error} />
+          <Button onClick={save} disabled={!name || !apiModelName}>
+            保存
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

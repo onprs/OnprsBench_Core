@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Deployment, Model, Provider, ReasoningProfile
+from ..models import Deployment, JudgeExecution, Model, Provider, ReasoningProfile, SolverExecution
 from ..runtime.factory import PROVIDER_TYPE_DEFAULTS
 from ..schemas import (
     DeploymentCreate,
@@ -245,6 +245,19 @@ def delete_deployment(deployment_id: str, db: Session = Depends(get_db)) -> None
     deployment = db.get(Deployment, deployment_id)
     if deployment is None:
         raise HTTPException(404, "deployment 不存在")
+    # SQLite 默认不强制外键：显式检查，避免历史 Run 出现悬空引用
+    used = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(SolverExecution)
+        .where(SolverExecution.deployment_id == deployment_id)
+    ) + db.scalar(
+        sa.select(sa.func.count())
+        .select_from(JudgeExecution)
+        .where(JudgeExecution.deployment_id == deployment_id)
+    )
+    if used:
+        raise HTTPException(409, "deployment 已被历史 Run 使用，为保持可追溯性不能删除")
+    db.query(ReasoningProfile).filter(ReasoningProfile.deployment_id == deployment_id).delete()
     db.delete(deployment)
     db.commit()
 
@@ -277,5 +290,16 @@ def delete_reasoning_profile(profile_id: str, db: Session = Depends(get_db)) -> 
     profile = db.get(ReasoningProfile, profile_id)
     if profile is None:
         raise HTTPException(404, "reasoning profile 不存在")
+    used = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(SolverExecution)
+        .where(SolverExecution.reasoning_profile_id == profile_id)
+    ) + db.scalar(
+        sa.select(sa.func.count())
+        .select_from(JudgeExecution)
+        .where(JudgeExecution.reasoning_profile_id == profile_id)
+    )
+    if used:
+        raise HTTPException(409, "reasoning profile 已被历史 Run 使用，为保持可追溯性不能删除")
     db.delete(profile)
     db.commit()

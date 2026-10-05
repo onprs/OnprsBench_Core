@@ -217,6 +217,24 @@ def get_run_usage(run_id: str, db: Session = Depends(get_db)) -> list[dict]:
     ]
 
 
+@router.post("/{run_id}/cancel", status_code=202)
+def cancel_run(run_id: str, db: Session = Depends(get_db)) -> dict:
+    """取消正在运行/等待中的 Run。已完成的执行记录保留，进行中的置为 cancelled。"""
+    run = db.get(Run, run_id)
+    if run is None:
+        raise HTTPException(404, "run 不存在")
+    if run.status not in ("pending", "running"):
+        raise HTTPException(409, f"run 已处于终态: {run.status}")
+    if not run_manager.cancel(run_id):
+        # 后台任务不在（如服务重启后遗留的 running 状态）：直接标记取消
+        run.status = "cancelled"
+        from ..services.runner import utcnow
+
+        run.finished_at = utcnow()
+        db.commit()
+    return {"run_id": run_id, "status": "cancelling"}
+
+
 @router.post("/{run_id}/rejudge", status_code=202)
 def rejudge(run_id: str, body: RejudgeRequest, db: Session = Depends(get_db)) -> dict:
     """对历史 Solver 回答重新评分。只新增 JudgeExecution，原始记录不变。"""

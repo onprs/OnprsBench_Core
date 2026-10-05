@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..db import get_db, session_scope
-from ..models import DatasetInstallation, TaskCache
+from ..models import DatasetInstallation, Run, TaskCache
 from ..schemas import DatasetInstall
 from ..services import datasets as dataset_service
 from ..services.datasets import DatasetValidationError
@@ -53,6 +53,21 @@ def install_dataset(body: DatasetInstall) -> dict:
 def list_installations(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(sa.select(DatasetInstallation).order_by(DatasetInstallation.installed_at.desc()))
     return [installation_dict(i) for i in rows]
+
+
+@router.delete("/installations/{installation_id}", status_code=204)
+def delete_installation(installation_id: str, db: Session = Depends(get_db)) -> None:
+    installation = db.get(DatasetInstallation, installation_id)
+    if installation is None:
+        raise HTTPException(404, "数据集安装不存在")
+    used = db.scalar(
+        sa.select(sa.func.count()).select_from(Run).where(Run.installation_id == installation_id)
+    )
+    if used:
+        raise HTTPException(409, "该数据集已被历史 Run 使用，为保持可追溯性不能卸载")
+    db.query(TaskCache).filter(TaskCache.installation_id == installation_id).delete()
+    db.delete(installation)
+    db.commit()
 
 
 @router.get("/installations/{installation_id}")
