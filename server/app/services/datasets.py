@@ -27,6 +27,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import DatasetInstallation, TaskCache
+from ..toolchain import repos as repo_toolchain
+from ..toolchain import ToolchainUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -259,10 +261,46 @@ def _materialize_managed_copy(dataset_dir: Path, mhash: str) -> Path:
     return managed
 
 
-def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstallation, bool]:
+def _collect_repo_contracts(payloads: list[dict]) -> list[tuple[str, str]]:
+    """从任务快照中收集需要去重后预取的仓库契约（repo_url, base_commit）。"""
+    seen: dict[tuple[str, str], None] = {}
+    for payload in payloads:
+        verify = payload.get("verify")
+        if not isinstance(verify, dict):
+            continue
+        base_commit = verify.get("base_commit")
+        repo_url = verify.get("repo_url") or (
+            f"https://github.com/{verify['repo']}" if verify.get("repo") else None
+        )
+        if repo_url and base_commit:
+            seen[(str(repo_url), str(base_commit))] = None
+    return list(seen)
+
+
+def _prefetch_repo_snapshots(payloads: list[dict]) -> list[dict]:
+    """安装时预取判定所需的仓库快照（best-effort）。
+
+    失败不阻断安装：记录为 failed，Run 执行判定时会重试下载（同一份缓存）。
+    """
+    report = []
+    for repo_url, base_commit in _collect_repo_contracts(payloads):
+        entry = {"repo_url": repo_url, "base_commit": base_commit, "status": "ready", "error": None}
+        try:
+            repo_toolchain.fetch_repo_snapshot(repo_url, base_commit)
+            logger.info("预取仓库快照成功: %s@%s", repo_url, base_commit[:8])
+        except ToolchainUnavailable as exc:
+            entry["status"] = "failed"
+            entry["error"] = str(exc)
+            logger.warning("预取仓库快照失败: %s@%s: %s", repo_url, base_commit[:8], exc)
+        report.append(entry)
+    return report
+
+
+def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstallation, bool, list[dict]]:
     """安装数据集。相同 manifest_hash 重复安装时复用已有记录。
 
-    返回 (installation, created)。
+    返回 (installation, created, prefetch_report)。新建安装时对带程序判定契约的
+    任务预取仓库快照（结果记入 prefetch_report，失败不阻断安装）。
     """
     dataset_dir = dataset_dir.resolve()
     manifest, mhash = load_manifest(dataset_dir)
@@ -271,7 +309,7 @@ def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstall
         sa.select(DatasetInstallation).where(DatasetInstallation.manifest_hash == mhash)
     )
     if existing is not None:
-        return existing, False
+        return existing, False, []
 
     managed_dir = _materialize_managed_copy(dataset_dir, mhash)
 
@@ -300,9 +338,11 @@ def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstall
     session.add(installation)
     session.flush()
 
+    payloads: list[dict] = []
     for suite in manifest["suites"]:
         for task in suite["tasks"]:
             payload = _assemble_task_payload(managed_dir, suite, task)
+            payloads.append(payload)
             session.add(
                 TaskCache(
                     installation_id=installation.id,
@@ -323,7 +363,10 @@ def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstall
                 )
             )
     session.flush()
-    return installation, True
+
+    # 安装时预取判定契约所需的仓库快照（填充共享缓存，Run 判定离线可用）
+    prefetch_report = _prefetch_repo_snapshots(payloads)
+    return installation, True, prefetch_report
 
 
 def get_suite_tasks(session: Session, installation: DatasetInstallation, suite_id: str) -> list[TaskCache]:

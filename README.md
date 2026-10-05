@@ -48,8 +48,9 @@ pnpm tauri dev
 `protocol/examples/mock-protocol-sample`（协议测试样例目录），即可离线跑通
 完整评测流程。
 
-程序判题说明：仅当任务带判定契约（如 SWE 修复、竞赛代码题）时触发，
-首次运行会自动下载所需工具链（uv / Python 独立构建 / 仓库归档；Windows 缺编译器时
+程序判题说明：仅当任务带判定契约（如 SWE 修复、竞赛代码题）时触发。
+安装数据集时会预取判定所需的仓库快照（失败不阻断安装，可在 Run 时重试）；
+首次运行会自动下载所需工具链（uv / Python 独立构建；Windows 缺编译器时
 自动下载便携 MinGW），之后离线可用；无网络时自动降级为纯文本评审，不影响其余功能。
 
 接入真实模型：创建对应类型的 Provider（OpenAI / Anthropic / Gemini / OpenRouter /

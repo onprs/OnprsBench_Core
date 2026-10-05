@@ -167,7 +167,7 @@ samples: judge_assets/samples.json          # 官方样例 [{input, output}]
 程序判定所需环境由框架自动供给，不要求用户预装：
 
 - Python 解释器与依赖：框架自动下载独立 Python 构建并创建虚拟环境（经 uv），按 `environment.python` 供给。
-- 仓库快照：框架按 `repo_url` + `base_commit` 下载源码归档（GitHub tarball），本地缓存，不依赖用户安装 git。
+- 仓库快照：框架按 `repo_url` + `base_commit` 下载源码归档（GitHub tarball），本地缓存，不依赖用户安装 git。安装数据集时对带判定契约的任务预取快照，Run 判定时缓存未命中再重试。
 - C/C++ 编译器：优先使用系统编译器；Windows 上缺失时自动下载便携 MinGW；无法供给时该任务判定降级为"不可用"，judge 仅依据文本证据评分并在结果中标注。
 - 补丁应用：框架内置 unified diff 应用能力。
 

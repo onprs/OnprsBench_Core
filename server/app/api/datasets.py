@@ -44,14 +44,18 @@ def installation_dict(inst: DatasetInstallation) -> dict:
 
 @router.post("/installations", status_code=201)
 def install_dataset(body: DatasetInstall) -> dict:
-    """安装本地目录数据集（需包含符合 Dataset Protocol 的 manifest.json）。"""
+    """安装本地目录数据集（需包含符合 Dataset Protocol 的 manifest.yaml）。
+
+    新建安装时会预取程序判定契约所需的仓库快照（结果见 prefetch 字段，
+    失败不阻断安装，Run 判定时会重试）。
+    """
     path = Path(body.path).expanduser()
     if not path.is_dir():
         raise HTTPException(400, f"目录不存在: {path}")
     try:
         with session_scope() as session:
-            installation, created = dataset_service.install_dataset(session, path)
-            return {"installation": installation_dict(installation), "created": created}
+            installation, created, prefetch = dataset_service.install_dataset(session, path)
+            return {"installation": installation_dict(installation), "created": created, "prefetch": prefetch}
     except DatasetValidationError as exc:
         raise HTTPException(422, detail={"message": "数据集不符合 Dataset Protocol", "errors": exc.errors}) from exc
 

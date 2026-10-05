@@ -120,6 +120,8 @@ raw facts，注入 Judge prompt（"程序判定事实"段落）；rubric 中声�
 - **Python 解释器/venv/依赖**：全部经 uv（`uv python install` 下载独立构建、
   `uv venv`、`uv pip install`），按任务契约的 `environment.python` 供给。
 - **仓库快照**：GitHub codeload tarball（按 commit），本地缓存，不依赖 git。
+  安装数据集时对带判定契约的任务预取快照（best-effort，失败不阻断安装，
+  API 响应的 prefetch 字段报告逐项结果）；Run 判定时缓存未命中会重试下载。
 - **C/C++ 编译器**：优先系统 g++/clang++；Windows 缺失时自动下载便携 MinGW（winlibs）；
   无法供给时抛 `ToolchainUnavailable`，该任务判定降级为 unavailable。
 - **补丁应用**：patch-ng（纯 Python，自动剥离 git 风格 a//b 前缀）。
