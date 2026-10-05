@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { HelpTip } from "@/components/HelpTip";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -104,6 +105,7 @@ function ProvidersTab({
   } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
+  const { confirm, confirmElement } = useConfirm();
 
   const selectedType = providerTypes.find((t) => t.type === type);
 
@@ -137,7 +139,11 @@ function ProvidersTab({
   }
 
   async function deleteProvider(provider: Provider) {
-    if (!window.confirm(`删除 Provider「${provider.name}」？其 API Key 会一并从系统安全存储移除。`)) return;
+    if (!(await confirm({
+      title: "删除 Provider？",
+      description: `「${provider.name}」的 API Key 会一并从系统安全存储移除。`,
+      confirmText: "删除",
+    }))) return;
     setListError(null);
     try {
       await api.delete(`/api/providers/${provider.id}`);
@@ -323,6 +329,7 @@ function ProvidersTab({
           </Card>
         </div>
       </div>
+      {confirmElement}
     </div>
   );
 }
@@ -430,6 +437,7 @@ function DeploymentsTab({
   const [profileEffort, setProfileEffort] = useState("");
   const [profileTemp, setProfileTemp] = useState("");
   const [editing, setEditing] = useState<Deployment | null>(null);
+  const { confirm, confirmElement } = useConfirm();
 
   async function createDeployment() {
     setError(null);
@@ -453,7 +461,12 @@ function DeploymentsTab({
   }
 
   async function deleteDeployment(d: Deployment) {
-    if (!window.confirm(`删除 Deployment「${d.name}」？`)) return;
+    const ok = await confirm({
+      title: "删除 Deployment？",
+      description: `「${d.name}」及其未被历史使用的 Reasoning Profile 将被删除。`,
+      confirmText: "删除",
+    });
+    if (!ok) return;
     setListError(null);
     try {
       await api.delete(`/api/deployments/${d.id}`);
@@ -464,7 +477,12 @@ function DeploymentsTab({
   }
 
   async function deleteProfile(p: ReasoningProfile) {
-    if (!window.confirm(`删除 Reasoning Profile「${p.name}」？`)) return;
+    const ok = await confirm({
+      title: "删除 Reasoning Profile？",
+      description: `「${p.name}」将被删除。`,
+      confirmText: "删除",
+    });
+    if (!ok) return;
     setListError(null);
     try {
       await api.delete(`/api/reasoning-profiles/${p.id}`);
@@ -656,6 +674,7 @@ function DeploymentsTab({
       </Dialog>
 
       <DeploymentEditDialog deployment={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
+      {confirmElement}
     </div>
   );
 }

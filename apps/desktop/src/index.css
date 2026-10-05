@@ -33,4 +33,33 @@
     @apply bg-background text-foreground;
     font-family: ui-sans-serif, system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
   }
+
+  /* 自定义滚动条（Chromium/WebView2） */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(240 4% 22%);
+    border-radius: 6px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(240 5% 32%);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(240 4% 22%) transparent;
+  }
 }

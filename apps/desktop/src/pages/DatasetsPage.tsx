@@ -3,6 +3,7 @@ import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
 import { fmtTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { HelpTip } from "@/components/HelpTip";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,7 @@ export function DatasetsPage() {
   const [tasks, setTasks] = useState<DatasetTask[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const { confirm, confirmElement } = useConfirm();
 
   const reload = useCallback(async () => {
     setInstallations(await api.get<DatasetInstallation[]>("/api/datasets/installations"));
@@ -46,7 +48,12 @@ export function DatasetsPage() {
   }
 
   async function uninstall(inst: DatasetInstallation) {
-    if (!window.confirm(`卸载数据集「${inst.dataset_name} v${inst.dataset_version}」？`)) return;
+    const ok = await confirm({
+      title: "卸载数据集？",
+      description: `「${inst.dataset_name} v${inst.dataset_version}」将从本地移除。`,
+      confirmText: "卸载",
+    });
+    if (!ok) return;
     setError(null);
     try {
       await api.delete(`/api/datasets/installations/${inst.id}`);
@@ -172,6 +179,8 @@ export function DatasetsPage() {
           </CardContent>
         </Card>
       )}
+
+      {confirmElement}
     </div>
   );
 }
