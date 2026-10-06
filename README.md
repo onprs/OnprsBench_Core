@@ -7,14 +7,16 @@
 ## 功能
 
 - **多 Solver × 多 Judge**：任意多个被评模型与评分模型，Judge 并行运行，评分输入对 Solver 身份匿名化
-- **Agent 形态 Solver**：工程修复类任务中，Solver 在真实的仓库工作副本中多轮工作（读代码、搜索、编辑、跑测试），改动自动生成为补丁参与判定；不再是单轮盲答
+- **Agent 执行**：所有任务统一在隔离工作区中多轮执行（读题、写代码或补丁、跑测试）。工程修复题在真实仓库副本中定位与修复，改动自动生成为补丁；竞赛题在工作区写出解答文件参与程序判题。每一轮的 token、耗时、结束原因与花费轮次全程留档
+- **命令沙箱**：工作区命令采用允许名单（python / pytest / g++ / 查看搜索类），参数禁止绝对路径、父目录穿越与 URL，子进程不继承代理与凭据变量，Python 子进程网络限制在回环地址；被拒绝的命令会记入原始事实
+- **预算与轮次可控**：思考程度、思考预算、最大输出 token、最大执行轮次均可在 Reasoning Profile 中设置；轮次可设为不限制。输出预算耗尽的回答会被标记为截断，与答错区分
 - **程序判题**：对带判定契约的任务（工程修复、竞赛代码）在本地真实执行判定——应用补丁跑 FAIL_TO_PASS/PASS_TO_PASS 回归测试、编译代码跑官方样例与生成器应力对拍；判定事实注入评分依据
 - **环境自带**：程序判定所需的 Python 解释器、依赖环境、仓库快照、C++ 编译器均由应用自动供给与缓存（首次使用需联网），不要求用户预装；无法供给时自动降级为纯文本评审并标注
 - **结构化评分**：按 rubric 维度打分（权重 × 0~1 维度分），保留每个 Judge 的原始输出，聚合 mean / median / stddev / min / max，分歧过大自动标记
-- **完整追溯**：每次 Run 冻结 framework 版本与 git commit、数据集 id/version/revision/manifest hash、task revision、全部推理配置与价格快照
+- **完整追溯**：每次 Run 冻结 framework 版本与 git commit、数据集 id/version/revision/manifest hash、task revision、推理配置快照与价格快照
 - **成本与延迟**：逐次调用记录 input/cached/output/reasoning tokens、成本、延迟；区分 solver / judge / 总计；历史成本永远按当时的定价快照计算
-- **时间维度**：Score / Cost / Latency over time，观察模型是否"只在今天聪明"
-- **对比**：多 Run 对比前自动判定可比性（数据集版本、修订、框架版本），Score vs Cost 散点图含 Pareto 前沿
+- **时间维度**：Score / Cost / Latency / 花费轮次 over time，观察模型是否"只在今天聪明"
+- **对比**：多 Run 对比前自动判定可比性（数据集版本、修订、框架版本、评分口径），Score vs Cost 散点图含 Pareto 前沿，对比表含花费轮次
 - **历史重评**：不重跑 Solver，用新 Judge 或新聚合算法重新评分历史回答
 - **数据集解耦**：评测题目来自符合 [Dataset Protocol](protocol/docs/dataset-protocol-v1.md) 的独立数据集，数据集独立发版、独立更新；本仓库不含真实 benchmark 题目
 
@@ -50,7 +52,8 @@ pnpm tauri dev
 完整评测流程。
 
 程序判题说明：仅当任务带判定契约（如 SWE 修复、竞赛代码题）时触发。
-安装数据集时会预取判定所需的仓库快照（失败不阻断安装，可在 Run 时重试）；
+标准数据集在安装时下载判定所需的全部仓库快照，下载失败会中止安装并提示改用完整数据集；
+完整数据集（`-full`）附带仓库快照与许可，安装后判定不联网。
 首次运行会自动下载所需工具链（uv / Python 独立构建；Windows 缺编译器时
 自动下载便携 MinGW），之后离线可用；无网络时自动降级为纯文本评审，不影响其余功能。
 
@@ -63,6 +66,8 @@ DeepSeek / OpenAI 兼容 / Ollama），填写 API Key。Key 只保存在系统�
 本仓库不内置真实 benchmark 题目。配套数据集是独立项目
 [OnprsBench_Dataset](https://github.com/onprs/OnprsBench_Dataset)：下载其 Release 产物
 （含冻结的 manifest.yaml 与完整 hash 清单），在「数据集」页安装解压后的目录即可。
+同一版本号提供两套产物：标准数据集（导入时下载全部判定资源，下载失败则导入失败并提示改用完整版）与完整数据集 `-full`
+（附带仓库快照与许可，安装后判定不联网），按网络条件选用。
 数据集独立发版，每次 Run 冻结 dataset id/version/commit/manifest hash，历史可追溯。
 
 任何符合 [Dataset Protocol v1](protocol/docs/dataset-protocol-v1.md) 的本地目录都可安装；
