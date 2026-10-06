@@ -20,6 +20,7 @@ export function DatasetsPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [tasks, setTasks] = useState<DatasetTask[]>([]);
   const [problemTask, setProblemTask] = useState<DatasetTask | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
   const installedListRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -104,6 +105,7 @@ export function DatasetsPage() {
   }, [sourceMenuOpen]);
 
   async function showTasks(installationId: string) {
+    setPanelOpen(true);
     setSelected(installationId);
     setTasks(await api.get<DatasetTask[]>(`/api/datasets/installations/${installationId}/tasks`));
   }
@@ -129,7 +131,10 @@ export function DatasetsPage() {
     setError(null);
     try {
       await api.delete(`/api/datasets/installations/${inst.id}`);
-      if (selected === inst.id) setSelected(null);
+      if (selected === inst.id) {
+        setSelected(null);
+        setPanelOpen(false);
+      }
       await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -147,7 +152,7 @@ export function DatasetsPage() {
           selected ? "max-h-[380px] opacity-100" : "max-h-0 opacity-0"
         )}
       >
-        {selected && (
+        {panelOpen && (
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle>题目列表（{tasks.length}）</CardTitle>
