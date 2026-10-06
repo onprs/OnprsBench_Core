@@ -47,6 +47,42 @@ def manifest_hash(manifest_path: Path) -> str:
     return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
 
+def _effective_visibility(task_dir: Path, task: dict, errors: list[str]) -> tuple[list[str], list[str]]:
+    """按 manifest 声明 + meta.yaml.visibility_overrides 计算有效可见性。
+
+    override 只能引用已登记文件；`meta` 可见的文件既不进 solver 也不进 judge。
+    """
+    declared = set(task["solver_visible"]) | set(task["judge_visible"])
+    solver = set(task["solver_visible"])
+    judge = set(task["judge_visible"])
+    meta_path = task_dir / "meta.yaml"
+    overrides: dict = {}
+    if meta_path.is_file():
+        try:
+            raw = yaml.safe_load(meta_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            raw = None
+        if isinstance(raw, dict) and isinstance(raw.get("visibility_overrides"), dict):
+            overrides = raw["visibility_overrides"]
+    for rel, visibility in overrides.items():
+        rel = str(rel)
+        if rel not in declared:
+            errors.append(f"task {task['id']}: visibility_overrides 引用了未登记文件: {rel}")
+            continue
+        if visibility == "solver":
+            solver.add(rel)
+            judge.discard(rel)
+        elif visibility == "judge":
+            judge.add(rel)
+            solver.discard(rel)
+        elif visibility == "meta":
+            solver.discard(rel)
+            judge.discard(rel)
+        else:
+            errors.append(f"task {task['id']}: visibility_overrides 取值非法: {rel} -> {visibility}")
+    return sorted(solver), sorted(judge)
+
+
 def _check_rubric(task_dir: Path, judge_visible: list[str], task_id: str, errors: list[str]) -> None:
     if "rubric.yaml" not in judge_visible:
         errors.append(f"task {task_id}: judge_visible 缺少 rubric.yaml")
@@ -128,8 +164,7 @@ def validate_dataset(dataset_dir: Path) -> list[str]:
             if declared and bundle_sha256({k: v for k, v in actual.items() if k in declared}) != task["hashes"]["bundle_sha256"]:
                 errors.append(f"task {task_id}: bundle_sha256 不匹配")
 
-            solver_visible = task["solver_visible"]
-            judge_visible = task["judge_visible"]
+            solver_visible, judge_visible = _effective_visibility(task_dir, task, errors)
             overlap = set(solver_visible) & set(judge_visible)
             if overlap:
                 errors.append(f"task {task_id}: solver/judge 可见性重叠: {sorted(overlap)}")

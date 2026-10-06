@@ -35,7 +35,11 @@ export function DatasetsPage() {
         "/api/datasets/installations",
         { path }
       );
-      setInfo(result.created ? "安装成功" : "相同内容的数据集已安装，已复用");
+      if (result.installation.distribution === "full") {
+        setInfo("安装成功（完整数据集：判定资源已就绪，可离线判定）");
+      } else {
+        setInfo(result.created ? "安装成功（标准数据集：判定资源已下载）" : "相同内容的数据集已安装，已复用");
+      }
       await reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -100,6 +104,7 @@ export function DatasetsPage() {
               <TableRow>
                 <TableHead>数据集</TableHead>
                 <TableHead>版本</TableHead>
+                <TableHead>形态</TableHead>
                 <TableHead>修订</TableHead>
                 <TableHead>协议</TableHead>
                 <TableHead>Suites</TableHead>
@@ -115,6 +120,13 @@ export function DatasetsPage() {
                     <div className="font-mono text-xs text-muted-foreground">{inst.dataset_id}</div>
                   </TableCell>
                   <TableCell>{inst.dataset_version}</TableCell>
+                  <TableCell>
+                    {inst.distribution === "full" ? (
+                      <Badge variant="success">完整（离线）</Badge>
+                    ) : (
+                      <Badge variant="secondary">标准</Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{inst.dataset_revision}</TableCell>
                   <TableCell>v{inst.protocol_version}</TableCell>
                   <TableCell>

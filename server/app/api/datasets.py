@@ -12,7 +12,7 @@ from ..db import get_db, session_scope
 from ..models import DatasetInstallation, Run, TaskCache
 from ..schemas import DatasetInstall
 from ..services import datasets as dataset_service
-from ..services.datasets import DatasetValidationError
+from ..services.datasets import DatasetResourceError, DatasetValidationError
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -26,6 +26,7 @@ def installation_dict(inst: DatasetInstallation) -> dict:
         "dataset_revision": inst.dataset_revision,
         "protocol_version": inst.protocol_version,
         "manifest_hash": inst.manifest_hash,
+        "distribution": inst.distribution,
         "source_path": inst.source_path,
         "capabilities": inst.capabilities,
         "installed_at": inst.installed_at,
@@ -46,8 +47,8 @@ def installation_dict(inst: DatasetInstallation) -> dict:
 def install_dataset(body: DatasetInstall) -> dict:
     """安装本地目录数据集（需包含符合 Dataset Protocol 的 manifest.yaml）。
 
-    新建安装时会预取程序判定契约所需的仓库快照（结果见 prefetch 字段，
-    失败不阻断安装，Run 判定时会重试）。
+    standard 形态在安装时预取全部判定资源，任一项失败即中止安装（409，
+    返回失败项与提示）；full 形态直接注册附带的仓库归档，判定不联网。
     """
     path = Path(body.path).expanduser()
     if not path.is_dir():
@@ -58,6 +59,15 @@ def install_dataset(body: DatasetInstall) -> dict:
             return {"installation": installation_dict(installation), "created": created, "prefetch": prefetch}
     except DatasetValidationError as exc:
         raise HTTPException(422, detail={"message": "数据集不符合 Dataset Protocol", "errors": exc.errors}) from exc
+    except DatasetResourceError as exc:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "判定资源准备失败，数据集未安装",
+                "errors": exc.errors,
+                "hint": exc.hint,
+            },
+        ) from exc
 
 
 @router.get("/installations")

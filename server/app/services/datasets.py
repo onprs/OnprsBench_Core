@@ -28,11 +28,11 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import DatasetInstallation, TaskCache
 from ..toolchain import repos as repo_toolchain
-from ..toolchain import ToolchainUnavailable
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_PROTOCOL_VERSIONS = {"1"}
+SUPPORTED_DISTRIBUTIONS = {"standard", "full"}
 
 
 class DatasetValidationError(Exception):
@@ -40,6 +40,15 @@ class DatasetValidationError(Exception):
 
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+class DatasetResourceError(Exception):
+    """判定资源准备失败（下载/注册），安装整体中止并给出失败项与提示。"""
+
+    def __init__(self, errors: list[str], hint: str | None = None) -> None:
+        self.errors = errors
+        self.hint = hint
         super().__init__("; ".join(errors))
 
 
@@ -85,6 +94,48 @@ def _validate_schema(manifest: dict) -> list[str]:
     return errors
 
 
+def _effective_visibility(
+    dataset_dir: Path, task: dict
+) -> tuple[list[str], list[str], list[str]]:
+    """按 manifest 声明 + meta.yaml.visibility_overrides 计算有效可见性。
+
+    返回 (solver_visible, judge_visible, errors)。overrides 只能引用 manifest 已登记
+    的文件；被覆盖为 meta 的文件既不进 solver 也不进 judge。
+    """
+    declared = set(task["solver_visible"]) | set(task["judge_visible"])
+    solver = set(task["solver_visible"])
+    judge = set(task["judge_visible"])
+    task_id = task["id"]
+    errors: list[str] = []
+
+    meta: dict = {}
+    meta_path = dataset_dir / task["path"] / "meta.yaml"
+    if meta_path.is_file():
+        raw = _load_yaml(meta_path)
+        if isinstance(raw, dict):
+            meta = raw
+    overrides = meta.get("visibility_overrides")
+    if isinstance(overrides, dict):
+        for rel, visibility in overrides.items():
+            rel = str(rel)
+            if rel not in declared:
+                errors.append(f"task {task_id}: visibility_overrides 引用了未登记文件: {rel}")
+                continue
+            if visibility == "solver":
+                solver.add(rel)
+                judge.discard(rel)
+            elif visibility == "judge":
+                judge.add(rel)
+                solver.discard(rel)
+            elif visibility == "meta":
+                solver.discard(rel)
+                judge.discard(rel)
+            else:
+                errors.append(f"task {task_id}: visibility_overrides 取值非法: {rel} -> {visibility}")
+
+    return sorted(solver), sorted(judge), errors
+
+
 def _validate_task_hashes(dataset_dir: Path, task: dict) -> list[str]:
     """校验 task bundle：文件 hash、bundle hash、可见性引用、目录外泄。"""
     errors: list[str] = []
@@ -116,8 +167,8 @@ def _validate_task_hashes(dataset_dir: Path, task: dict) -> list[str]:
     if not errors and bundle_sha256(actual) != task["hashes"]["bundle_sha256"]:
         errors.append(f"task {task_id}: bundle_sha256 不匹配")
 
-    solver_visible = task["solver_visible"]
-    judge_visible = task["judge_visible"]
+    solver_visible, judge_visible, visibility_errors = _effective_visibility(dataset_dir, task)
+    errors.extend(visibility_errors)
     overlap = set(solver_visible) & set(judge_visible)
     if overlap:
         errors.append(f"task {task_id}: solver/judge 可见性重叠: {sorted(overlap)}")
@@ -134,6 +185,7 @@ def _validate_task_hashes(dataset_dir: Path, task: dict) -> list[str]:
 def _assemble_task_payload(dataset_dir: Path, suite: dict, task: dict) -> dict:
     """把 bundle 文件组装为框架内部 task 快照（TaskCache.payload）。"""
     task_dir = dataset_dir / task["path"]
+    solver_visible, judge_visible, _errors = _effective_visibility(dataset_dir, task)
 
     def read(rel: str) -> str:
         return (task_dir / rel).read_text(encoding="utf-8")
@@ -154,14 +206,14 @@ def _assemble_task_payload(dataset_dir: Path, suite: dict, task: dict) -> dict:
 
     # reference/ 下全部文本按路径序拼接为参考解答包
     reference_parts = []
-    for rel in task["judge_visible"]:
+    for rel in judge_visible:
         if rel.startswith("reference/") and rel.endswith(".md"):
             reference_parts.append(f"### {rel}\n\n{read(rel).strip()}")
     reference = "\n\n".join(reference_parts)
 
     # anchors/score-XXX.md → 校准回答列表
     anchors = []
-    for rel in task["judge_visible"]:
+    for rel in judge_visible:
         match = re.fullmatch(r"anchors/score-(\d+)\.md", rel)
         if match:
             anchors.append({"score": int(match.group(1)), "text": read(rel).strip()})
@@ -169,7 +221,7 @@ def _assemble_task_payload(dataset_dir: Path, suite: dict, task: dict) -> dict:
 
     solver_assets = [
         {"path": rel, "sha256": task["hashes"]["files"][rel]}
-        for rel in task["solver_visible"]
+        for rel in solver_visible
         if rel != "problem.md"
     ]
 
@@ -200,7 +252,7 @@ def _assemble_task_payload(dataset_dir: Path, suite: dict, task: dict) -> dict:
             "reference": reference,
             "rubric": rubric,
             "anchors": anchors,
-            "judge_assets": [rel for rel in task["judge_visible"] if rel.startswith("judge_assets/")],
+            "judge_assets": [rel for rel in judge_visible if rel.startswith("judge_assets/")],
         },
         "verify": verify,
         "metadata": {
@@ -211,6 +263,56 @@ def _assemble_task_payload(dataset_dir: Path, suite: dict, task: dict) -> dict:
             "meta": meta,
         },
     }
+
+
+def _validate_resources(dataset_dir: Path, manifest: dict) -> list[str]:
+    """校验分发形态与附带资源（协议第 2.1/2.2 节）。
+
+    full 形态资源必须存在且与 manifest 声明的 bytes/sha256 一致，并带来源、
+    许可与署名；standard 形态不得附带资源。
+    """
+    errors: list[str] = []
+    distribution = str(manifest.get("distribution") or "standard")
+    resources = manifest.get("resources") or []
+    if distribution not in SUPPORTED_DISTRIBUTIONS:
+        return [f"不支持的分发形态: {distribution}"]
+    if distribution == "standard" and resources:
+        return ["standard 分发形态不应附带 resources"]
+
+    seen_paths: set[str] = set()
+    for index, res in enumerate(resources):
+        label = f"resources[{index}]"
+        rel = str(res.get("path") or "")
+        if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+            errors.append(f"{label}: 非法资源路径: {rel!r}")
+            continue
+        if rel in seen_paths:
+            errors.append(f"{label}: 资源路径重复: {rel}")
+        seen_paths.add(rel)
+
+        path = dataset_dir / rel
+        if not path.is_file():
+            errors.append(f"{label}: 资源文件不存在: {rel}")
+            continue
+        if path.stat().st_size != int(res.get("bytes") or -1):
+            errors.append(f"{label}: 资源大小与声明不一致: {rel}")
+        if sha256_file(path) != res.get("sha256"):
+            errors.append(f"{label}: 资源 sha256 不匹配: {rel}")
+
+        source = res.get("source") or {}
+        for field in ("repo", "url", "commit", "license", "attribution"):
+            if not source.get(field):
+                errors.append(f"{label}: source 缺少 {field}")
+        license_file = source.get("license_file")
+        if license_file:
+            license_path = Path(str(license_file))
+            if (
+                license_path.is_absolute()
+                or ".." in license_path.parts
+                or not (dataset_dir / license_path).is_file()
+            ):
+                errors.append(f"{label}: 许可文件缺失或路径非法: {license_file}")
+    return errors
 
 
 def load_manifest(dataset_dir: Path) -> tuple[dict, str]:
@@ -232,6 +334,10 @@ def load_manifest(dataset_dir: Path) -> tuple[dict, str]:
 
     if manifest["protocol_version"] not in SUPPORTED_PROTOCOL_VERSIONS:
         raise DatasetValidationError([f"不支持的 protocol_version: {manifest['protocol_version']}"])
+
+    errors = _validate_resources(dataset_dir, manifest)
+    if errors:
+        raise DatasetValidationError(errors)
 
     errors = []
     seen_ids: set[str] = set()
@@ -278,20 +384,58 @@ def _collect_repo_contracts(payloads: list[dict]) -> list[tuple[str, str]]:
 
 
 def _prefetch_repo_snapshots(payloads: list[dict]) -> list[dict]:
-    """安装时预取判定所需的仓库快照（best-effort）。
+    """预取判定所需的仓库快照（standard 形态安装时执行）。
 
-    失败不阻断安装：记录为 failed，Run 执行判定时会重试下载（同一份缓存）。
+    逐项尝试并记录结果；调用方根据 status=failed 的条目中止安装。
     """
     report = []
     for repo_url, base_commit in _collect_repo_contracts(payloads):
-        entry = {"repo_url": repo_url, "base_commit": base_commit, "status": "ready", "error": None}
+        entry = {
+            "repo_url": repo_url,
+            "base_commit": base_commit,
+            "status": "ready",
+            "error": None,
+        }
         try:
             repo_toolchain.fetch_repo_snapshot(repo_url, base_commit)
             logger.info("预取仓库快照成功: %s@%s", repo_url, base_commit[:8])
-        except ToolchainUnavailable as exc:
+        except Exception as exc:  # 网络/磁盘等异常统一转为安装失败项
             entry["status"] = "failed"
-            entry["error"] = str(exc)
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            entry["hint"] = "可改用完整数据集（-full）避免判定时下载失败"
             logger.warning("预取仓库快照失败: %s@%s: %s", repo_url, base_commit[:8], exc)
+        report.append(entry)
+    return report
+
+
+def _register_bundled_resources(dataset_dir: Path, resources: list[dict]) -> list[dict]:
+    """把 full 形态附带的仓库归档注册到本地缓存（判定时不再联网）。"""
+    report: list[dict] = []
+    for res in resources:
+        source = res.get("source") or {}
+        entry = {
+            "resource_id": res.get("id"),
+            "repo_url": source.get("url"),
+            "base_commit": source.get("commit"),
+            "status": "bundled",
+            "error": None,
+        }
+        if res.get("kind") != "repo_snapshot":
+            entry["status"] = "skipped"
+            entry["error"] = f"未知资源类型: {res.get('kind')}"
+            report.append(entry)
+            continue
+        try:
+            repo_toolchain.register_repo_archive(
+                archive=dataset_dir / str(res["path"]),
+                repo_url=str(source["url"]),
+                commit=str(source["commit"]),
+            )
+            logger.info("注册附带仓库资源成功: %s", res.get("id"))
+        except Exception as exc:  # 磁盘/权限等异常统一转为安装失败项
+            entry["status"] = "failed"
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            logger.warning("注册附带仓库资源失败 %s: %s", res.get("path"), exc)
         report.append(entry)
     return report
 
@@ -299,11 +443,15 @@ def _prefetch_repo_snapshots(payloads: list[dict]) -> list[dict]:
 def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstallation, bool, list[dict]]:
     """安装数据集。相同 manifest_hash 重复安装时复用已有记录。
 
-    返回 (installation, created, prefetch_report)。新建安装时对带程序判定契约的
-    任务预取仓库快照（结果记入 prefetch_report，失败不阻断安装）。
+    返回 (installation, created, resource_report)：
+    - standard 形态：安装时预取全部仓库快照；任一项失败即中止安装（不创建记录），
+      并返回失败项与改用完整数据集的提示；
+    - full 形态：校验并注册附带的仓库归档到本地缓存，注册失败同样中止安装。
     """
     dataset_dir = dataset_dir.resolve()
     manifest, mhash = load_manifest(dataset_dir)
+    distribution = str(manifest.get("distribution") or "standard")
+    resources = manifest.get("resources") or []
 
     existing = session.scalar(
         sa.select(DatasetInstallation).where(DatasetInstallation.manifest_hash == mhash)
@@ -311,6 +459,8 @@ def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstall
     if existing is not None:
         return existing, False, []
 
+    managed_dir_before = settings.datasets_dir / mhash[:16]
+    managed_existed = managed_dir_before.exists()
     managed_dir = _materialize_managed_copy(dataset_dir, mhash)
 
     ds = manifest["dataset"]
@@ -321,6 +471,7 @@ def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstall
         dataset_revision=ds["revision"],
         protocol_version=manifest["protocol_version"],
         manifest_hash=mhash,
+        distribution=distribution,
         source_path=str(managed_dir),
         suites=[
             {
@@ -364,9 +515,28 @@ def install_dataset(session: Session, dataset_dir: Path) -> tuple[DatasetInstall
             )
     session.flush()
 
-    # 安装时预取判定契约所需的仓库快照（填充共享缓存，Run 判定离线可用）
-    prefetch_report = _prefetch_repo_snapshots(payloads)
-    return installation, True, prefetch_report
+    if distribution == "full":
+        # full 形态：注册附带的仓库归档到本地缓存（判定不联网）
+        resource_report = _register_bundled_resources(managed_dir, resources)
+        failure_hint = "完整数据集附带的资源注册失败，请检查数据目录权限后重试"
+    else:
+        # standard 形态：预取全部判定资源；任一失败即中止安装
+        resource_report = _prefetch_repo_snapshots(payloads)
+        failure_hint = "预取失败通常由网络问题引起；可改用完整数据集（-full）离线安装"
+
+    failures = [item for item in resource_report if item["status"] == "failed"]
+    if failures:
+        # 回滚本次创建的托管副本（已存在的副本保留复用）
+        if not managed_existed:
+            shutil.rmtree(managed_dir, ignore_errors=True)
+        raise DatasetResourceError(
+            [
+                f"{item.get('repo_url') or item.get('resource_id')}: {item.get('error')}"
+                for item in failures
+            ],
+            hint=failure_hint,
+        )
+    return installation, True, resource_report
 
 
 def get_suite_tasks(session: Session, installation: DatasetInstallation, suite_id: str) -> list[TaskCache]:

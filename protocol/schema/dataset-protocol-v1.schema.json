@@ -8,6 +8,12 @@
   "additionalProperties": false,
   "properties": {
     "protocol_version": { "type": "string", "const": "1" },
+    "distribution": {
+      "type": "string",
+      "enum": ["standard", "full"],
+      "default": "standard",
+      "description": "分发形态：standard 仅含任务内容，判定资源按需下载；full 附带 resources 中的全部判定资源，可离线判定"
+    },
     "dataset": {
       "type": "object",
       "required": ["id", "name", "version", "release_date", "revision", "description", "license"],
@@ -20,6 +26,35 @@
         "revision": { "type": "string", "minLength": 1, "description": "构建时的 git commit；无仓库信息时为 uncommitted" },
         "description": { "type": "string" },
         "license": { "type": "string" }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "description": "分发形态为 full 时附带的可校验判定资源（路径相对 manifest 根）",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "path", "sha256", "bytes", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["repo_snapshot"] },
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "source": {
+            "type": "object",
+            "required": ["repo", "url", "commit", "license", "attribution"],
+            "additionalProperties": false,
+            "properties": {
+              "repo": { "type": "string", "minLength": 1 },
+              "url": { "type": "string", "minLength": 1 },
+              "commit": { "type": "string", "minLength": 1 },
+              "license": { "type": "string", "minLength": 1 },
+              "attribution": { "type": "string", "minLength": 1 },
+              "license_file": { "type": ["string", "null"] }
+            }
+          }
+        }
       }
     },
     "suites": {

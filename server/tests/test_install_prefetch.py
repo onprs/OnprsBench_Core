@@ -2,7 +2,7 @@
 
 不变量：
 - 带 SWE 判定契约（repo_url + base_commit）的任务在安装时触发快照预取
-- 预取失败不阻断安装，报告 failed；Run 判定时仍会重试（共享缓存兜底）
+- standard 形态预取失败即中止安装（不创建记录）并返回失败项与提示
 - 无契约的数据集（mock 样例）安装时不发生任何预取
 """
 
@@ -96,9 +96,10 @@ def test_install_with_contract_prefetches_snapshot(
     ]
 
 
-def test_install_prefetch_failure_does_not_block(
+def test_install_prefetch_failure_aborts_installation(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """标准形态预取失败即中止安装：不创建记录、返回失败项与提示。"""
     ds = _add_verify_contract(_copy_sample(tmp_path), commit="b" * 40)
 
     def fail(url: str, commit: str) -> None:
@@ -106,11 +107,17 @@ def test_install_prefetch_failure_does_not_block(
 
     monkeypatch.setattr("app.toolchain.repos.fetch_repo_snapshot", fail)
     resp = client.post("/api/datasets/installations", json={"path": str(ds)})
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["created"] is True
-    assert body["prefetch"][0]["status"] == "failed"
-    assert "离线环境" in body["prefetch"][0]["error"]
-    # 安装本身成功，任务可查询
-    tasks = client.get(f"/api/datasets/installations/{body['installation']['id']}/tasks").json()
-    assert any(t["has_verify_contract"] for t in tasks)
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["message"] == "判定资源准备失败，数据集未安装"
+    assert any("离线环境" in error for error in detail["errors"])
+    assert "完整数据集" in detail["hint"]
+
+    # 事务回滚：未创建安装记录；本次创建的托管副本被清理
+    manifest_hash = hashlib.sha256((ds / "manifest.yaml").read_bytes()).hexdigest()
+    installs = client.get("/api/datasets/installations").json()
+    assert not any(item["manifest_hash"] == manifest_hash for item in installs)
+
+    from app.config import settings
+
+    assert not (settings.datasets_dir / manifest_hash[:16]).exists()

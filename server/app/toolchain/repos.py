@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import shutil
@@ -33,21 +34,58 @@ def _parse_github(repo_url: str) -> tuple[str, str]:
     return match.group("owner"), match.group("repo")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def repo_archive_path(repo_url: str, commit: str) -> Path:
+    """仓库归档的本地缓存路径。
+
+    数据集完整形态（distribution: full）附带的仓库快照使用相同命名，
+    安装时注册到本缓存后判定即不再联网。
+    """
+    owner, repo = _parse_github(repo_url)
+    return settings.cache_dir / "repo_archives" / f"{owner}-{repo}-{commit}.tar.gz"
+
+
+def register_repo_archive(*, archive: Path, repo_url: str, commit: str) -> Path:
+    """把数据集附带的仓库归档注册到本地缓存（幂等）。
+
+    内容一致（sha256 相同）时不重复复制；内容不同时以数据集声明为准覆盖，
+    保证后续 fetch_repo_snapshot 能命中校验过的归档。
+    """
+    dest = repo_archive_path(repo_url, commit)
+    if dest.is_file() and _sha256_file(dest) == _sha256_file(archive):
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(archive, dest)
+    logger.info("已注册数据集附带的仓库归档: %s", dest)
+    return dest
+
+
 def fetch_repo_snapshot(repo_url: str, commit: str) -> Path:
     """获取仓库在指定 commit 的纯净快照目录（缓存复用）。
 
-    返回目录内容已剥离归档顶层目录，可直接作为工作副本复制。
+    优先命中本地归档（此前下载或数据集完整形态附带），其次命中已解压快照，
+    最后才联网下载。返回目录内容已剥离归档顶层目录，可直接作为工作副本复制。
     """
     owner, repo = _parse_github(repo_url)
     key = f"{owner}-{repo}@{commit}"
-    archive = settings.cache_dir / "repo_archives" / f"{owner}-{repo}-{commit}.tar.gz"
+    archive = repo_archive_path(repo_url, commit)
     snapshot_dir = settings.cache_dir / "repo_snapshots" / key
 
     with _lock_for(key):
         if snapshot_dir.is_dir() and any(snapshot_dir.iterdir()):
             return snapshot_dir
-        url = f"https://codeload.github.com/{owner}/{repo}/tar.gz/{commit}"
-        download_file(url, archive)
+        if archive.is_file():
+            logger.info("使用本地仓库归档（数据集附带或此前下载）: %s", archive)
+        else:
+            url = f"https://codeload.github.com/{owner}/{repo}/tar.gz/{commit}"
+            download_file(url, archive)
         snapshot_dir.parent.mkdir(parents=True, exist_ok=True)
         tmp = snapshot_dir.with_name(snapshot_dir.name + ".tmp")
         shutil.rmtree(tmp, ignore_errors=True)
