@@ -29,6 +29,10 @@
   * {
     @apply border-border;
   }
+  html {
+    /* 窗口缩放/重绘期间暴露的画布背景保持深色，避免白底闪现 */
+    background-color: hsl(var(--background));
+  }
   body {
     @apply bg-background text-foreground;
     font-family: ui-sans-serif, system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
