@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from ..config import settings
@@ -90,6 +91,11 @@ def create_venv(python_path: Path, venv_dir: Path) -> Path:
     return py
 
 
+# uv 对共享缓存的并发写存在竞争（同一包被多个判定并行构建时已观察到失败），
+# 安装操作进程内串行化；安装是秒级操作，不构成瓶颈。
+_pip_lock = threading.Lock()
+
+
 def pip_install(venv_py: Path, args: list[str], *, cwd: Path | None = None) -> None:
     """向 venv 安装依赖（经 uv，利用其全局缓存加速重复安装）。
 
@@ -102,11 +108,12 @@ def pip_install(venv_py: Path, args: list[str], *, cwd: Path | None = None) -> N
     # uv pip 需要知道目标环境
     env["VIRTUAL_ENV"] = str(venv_py.parent.parent)
     env.setdefault("SETUPTOOLS_SCM_PRETEND_VERSION", "1.0.0")
-    result = _run(
-        [uv, "pip", "install", "--python", str(venv_py.resolve()), *args],
-        cwd=cwd,
-        timeout_s=settings.verify_step_timeout_s,
-        env=env,
-    )
-    if result.returncode != 0:
-        raise ToolchainUnavailable(f"依赖安装失败（{' '.join(args)}）: {result.stderr.strip()[:300]}")
+    command = [str(a) for a in [uv, "pip", "install", "--python", str(venv_py.resolve()), *args]]
+    with _pip_lock:
+        for attempt in (1, 2):  # 缓存竞争等瞬时失败重试一次
+            result = _run(command, cwd=cwd, timeout_s=settings.verify_step_timeout_s, env=env)
+            if result.returncode == 0:
+                return
+            if attempt == 1:
+                logger.warning("依赖安装失败，重试一次: %s", result.stderr.strip()[:200])
+    raise ToolchainUnavailable(f"依赖安装失败（{' '.join(args)}）: {result.stderr.strip()[:300]}")

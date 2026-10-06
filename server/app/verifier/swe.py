@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+import threading
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -27,24 +28,29 @@ from .extract import extract_patch
 
 logger = logging.getLogger(__name__)
 
+# patch_ng.apply 内部使用 os.chdir(root)（进程级状态），并发应用会互相干扰，
+# 必须以进程级互斥串行化（补丁应用本身是毫秒级操作，无性能损失）。
+_apply_lock = threading.Lock()
+
 
 def _apply_patch(repo_dir: Path, patch_text: str) -> tuple[bool, str]:
     """应用 unified diff。patch-ng 会自动剥离 git 风格 a//b 前缀（strip=0）；
     对老式手工 diff（路径带 a//b 但无 git 头）回退 strip=1。"""
-    for strip in (0, 1):
-        try:
-            patchset = patch_ng.fromstring(patch_text.encode("utf-8"))
-        except Exception as exc:  # patch-ng 解析异常类型不统一
-            return False, f"补丁解析失败: {exc}"
-        if not patchset:
-            return False, "补丁内容为空或无法识别"
-        try:
-            ok = patchset.apply(root=str(repo_dir), strip=strip, fuzz=True)
-        except Exception as exc:
-            return False, f"补丁应用异常: {exc}"
-        if ok:
-            return True, "ok"
-    return False, "补丁应用失败（hunk 不匹配）"
+    with _apply_lock:
+        for strip in (0, 1):
+            try:
+                patchset = patch_ng.fromstring(patch_text.encode("utf-8"))
+            except Exception as exc:  # patch-ng 解析异常类型不统一
+                return False, f"补丁解析失败: {exc}"
+            if not patchset:
+                return False, "补丁内容为空或无法识别"
+            try:
+                ok = patchset.apply(root=str(repo_dir), strip=strip, fuzz=True)
+            except Exception as exc:
+                return False, f"补丁应用异常: {exc}"
+            if ok:
+                return True, "ok"
+        return False, "补丁应用失败（hunk 不匹配）"
 
 
 def _run_setup_steps(venv_py: Path, repo_dir: Path, steps: list[str]) -> tuple[bool, str]:

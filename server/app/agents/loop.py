@@ -16,14 +16,20 @@ from typing import Any
 from ..runtime.base import ModelRequest, ToolsCapableClient
 from .tools import TOOL_SCHEMAS, WorkspaceTools
 
-AGENT_SYSTEM_PROMPT = """你是一名严谨的软件工程师，正在一个代码仓库的工作副本中修复问题。
+AGENT_SYSTEM_PROMPT = """你是一名严谨的软件工程师，正在修复代码仓库中的问题。
 
-可用工具：list_files（列目录）、read_file（读文件）、write_file（写文件）、
-search_text（搜索文本）、run_command（在工作区执行命令，可运行测试）。
+【工作环境】
+- 你的当前目录就是仓库根目录（已 checkout 到问题修复前的状态），所有工具路径均为仓库内相对路径。
+- 可用工具：list_files（列目录）、read_file（读文件）、write_file（写文件）、
+  search_text（搜索文本）、run_command（在仓库根目录执行命令，如 python -m pytest tests/ -q）。
+- 不要使用绝对路径，不要访问当前目录以外的任何位置，不要探查系统环境。
 
-工作流程建议：先读题面理解问题 → 用 list_files / search_text 定位相关源码 →
-实施最小修复（write_file）→ 用 run_command 运行相关测试验证 → 确认后给出最终总结。
-只修改源码，不要修改测试文件。工作区的文件改动会自动作为你的修复补丁提交。"""
+【工作纪律】
+1. 先读题面理解问题，用 search_text / read_file 定位相关源码。
+2. 用 write_file 实施最小修复（只改源码，不改测试文件）。
+3. 用 run_command 运行相关测试验证。
+4. 测试通过后立即停止：用一段纯文本总结你的修复（不再调用任何工具）。
+   反复无进展时也应尽快总结当前状态并停止。你的工作区文件改动会自动作为修复补丁提交，无需手动导出。"""
 
 
 @dataclass
@@ -85,6 +91,16 @@ async def run_agent_loop(
                 output = await tools.dispatch(call.name, call.arguments)
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": output}
+                )
+
+            # 轮次将尽时引导收尾，避免模型无限迭代到硬性截断
+            remaining = max_turns - result.turns
+            if remaining == 3:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "轮次即将用尽（剩余 3 轮）。请立即停止进一步操作，用一段纯文本总结你已完成的工作（不再调用任何工具）。",
+                    }
                 )
         else:
             result.stop_reason = "max_turns"

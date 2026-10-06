@@ -16,11 +16,25 @@ def _is_binary(data: bytes) -> bool:
     return b"\0" in data[:_BINARY_SAMPLE]
 
 
+# 判定无关的产物目录/文件：agent 运行测试会生成缓存，不得进入补丁
+_EXCLUDE_DIRS = {".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules", ".tox", ".eggs"}
+_EXCLUDE_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _excluded(rel: str) -> bool:
+    parts = rel.split("/")
+    return (
+        any(part in _EXCLUDE_DIRS for part in parts)
+        or any(rel.endswith(suffix) for suffix in _EXCLUDE_SUFFIXES)
+        or any(part.endswith(".egg-info") for part in parts)
+    )
+
+
 def _rel_files(root: Path) -> dict[str, Path]:
     return {
         p.relative_to(root).as_posix(): p
         for p in sorted(root.rglob("*"))
-        if p.is_file() and ".venv" not in p.relative_to(root).parts
+        if p.is_file() and not _excluded(p.relative_to(root).as_posix())
     }
 
 
