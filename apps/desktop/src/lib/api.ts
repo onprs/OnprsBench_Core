@@ -64,6 +64,9 @@ export interface Provider {
   base_url: string | null;
   has_credential: boolean;
   created_at: string;
+  /** 已拉取的模型数量与时间（0 表示尚未拉取） */
+  model_catalog_count: number;
+  model_catalog_fetched_at: string | null;
 }
 
 export interface ModelInfo {

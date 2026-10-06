@@ -45,6 +45,12 @@ SQLite + SQLAlchemy 2.x，迁移由 Alembic 管理（`server/alembic/`，应用�
 | provider_params | JSON | provider 专属参数 |
 | agent_max_turns | int? | Agent 最大工具循环轮次：空 = 框架默认；0 = 不限制；>0 = 上限 |
 
+### provider_model_catalogs
+Provider 可用模型列表的最近一次拉取结果（每个 Provider 至多一条）：
+provider_id FK（unique）、fetched_at、models（JSON：上游模型 ID 列表）。
+用于界面展示已拉取列表与“再次拉取”状态，避免每次打开都请求上游；
+删除 Provider 时一并移除。
+
 ## 数据集层
 
 ### dataset_installations

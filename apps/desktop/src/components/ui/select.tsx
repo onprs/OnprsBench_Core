@@ -80,4 +80,20 @@ const SelectItem = React.forwardRef<
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;
 
-export { Select, SelectGroup, SelectValue, SelectTrigger, SelectContent, SelectItem };
+/** 空列表占位：无可选项时下拉仍可展开并显示提示，而不是点击无反应。 */
+function SelectEmpty({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <SelectPrimitive.Item
+      value="__empty__"
+      disabled
+      className={cn(
+        "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-muted-foreground outline-none data-[disabled]:pointer-events-none",
+        className
+      )}
+    >
+      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    </SelectPrimitive.Item>
+  );
+}
+
+export { Select, SelectGroup, SelectValue, SelectTrigger, SelectContent, SelectItem, SelectEmpty };

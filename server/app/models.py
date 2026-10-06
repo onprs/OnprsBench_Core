@@ -78,6 +78,21 @@ class Provider(Base):
     deployments: Mapped[list["Deployment"]] = relationship(back_populates="provider")
 
 
+class ProviderModelCatalog(Base):
+    """Provider 可用模型列表的最近一次拉取结果。
+
+    保留已拉取列表供界面直接展示（不重复请求上游）；fetched_at 为拉取时间，
+    models 为上游返回的模型 ID 列表。每个 Provider 至多一条记录。
+    """
+
+    __tablename__ = "provider_model_catalogs"
+
+    id: Mapped[str] = mapped_column(sa.String(32), primary_key=True, default=new_id)
+    provider_id: Mapped[str] = mapped_column(sa.ForeignKey("providers.id"), unique=True, index=True)
+    fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    models: Mapped[list] = mapped_column(sa.JSON, default=list)
+
+
 class Deployment(Base):
     """Evaluation Target 的载体：Model × Provider × endpoint × options。"""
 

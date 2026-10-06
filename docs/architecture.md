@@ -240,7 +240,7 @@ reference 拼接、anchors、verify 契约、meta.yaml 元数据）。安装时�
 | `GET/POST/DELETE /api/reasoning-profiles` | Reasoning Profile；被引用时禁止删除（409） |
 | `DELETE /api/datasets/installations/{id}` | 卸载数据集；被 Run 引用时禁止（409） |
 | `GET /api/provider-types` | 内置 provider 类型与默认值 |
-| `GET /api/providers/{id}/models` | 从 provider 拉取模型列表（尽力而为） |
+| `GET /api/providers/{id}/models` | Provider 可用模型列表；默认返回缓存，`refresh=true` 强制重拉并更新缓存（首次访问自动拉取） |
 | `GET/POST /api/models` | canonical Model |
 | `GET/POST/PATCH/DELETE /api/deployments` | Deployment |
 | `GET/POST/DELETE /api/reasoning-profiles` | Reasoning Profile |

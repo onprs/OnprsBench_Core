@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { HelpTip } from "@/components/HelpTip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectEmpty, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -102,6 +102,9 @@ function ProvidersTab({
     provider: Provider;
     models: string[] | null;
     error: string | null;
+    fromCache: boolean;
+    fetchedAt: string | null;
+    refreshing: boolean;
   } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
@@ -128,13 +131,63 @@ function ProvidersTab({
   }
 
   async function fetchModels(provider: Provider) {
-    setModelsPanel({ provider, models: null, error: null });
+    setModelsPanel({
+      provider,
+      models: null,
+      error: null,
+      fromCache: false,
+      fetchedAt: provider.model_catalog_fetched_at,
+      refreshing: false,
+    });
     setPanelOpen(true);
     try {
-      const data = await api.get<{ models: string[] }>(`/api/providers/${provider.id}/models`);
-      setModelsPanel({ provider, models: data.models, error: null });
+      // 首次访问会直接拉取；已有缓存时立即返回旧列表，随后后台刷新
+      const data = await api.get<{ models: string[]; fetched_at: string | null; from_cache: boolean }>(
+        `/api/providers/${provider.id}/models`
+      );
+      setModelsPanel({
+        provider,
+        models: data.models,
+        error: null,
+        fromCache: data.from_cache,
+        fetchedAt: data.fetched_at,
+        refreshing: data.from_cache,
+      });
+      await onChanged();
+      if (!data.from_cache) return;
+
+      try {
+        const fresh = await api.get<{ models: string[]; fetched_at: string | null; from_cache: boolean }>(
+          `/api/providers/${provider.id}/models?refresh=true`
+        );
+        setModelsPanel({
+          provider,
+          models: fresh.models,
+          error: null,
+          fromCache: false,
+          fetchedAt: fresh.fetched_at,
+          refreshing: false,
+        });
+        await onChanged();
+      } catch (e) {
+        setModelsPanel({
+          provider,
+          models: data.models,
+          error: `刷新失败，以下为上次拉取结果：${e instanceof Error ? e.message : String(e)}`,
+          fromCache: true,
+          fetchedAt: data.fetched_at,
+          refreshing: false,
+        });
+      }
     } catch (e) {
-      setModelsPanel({ provider, models: null, error: e instanceof Error ? e.message : String(e) });
+      setModelsPanel({
+        provider,
+        models: null,
+        error: e instanceof Error ? e.message : String(e),
+        fromCache: false,
+        fetchedAt: provider.model_catalog_fetched_at,
+        refreshing: false,
+      });
     }
   }
 
@@ -227,6 +280,7 @@ function ProvidersTab({
                 <TableHead>名称</TableHead>
                 <TableHead>类型</TableHead>
                 <TableHead>凭据</TableHead>
+                <TableHead>模型列表</TableHead>
                 <TableHead className="w-[220px]"></TableHead>
               </TableRow>
             </TableHeader>
@@ -236,18 +290,23 @@ function ProvidersTab({
                   <TableCell className="whitespace-nowrap">{p.name}</TableCell>
                   <TableCell>{p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                    {p.model_catalog_count > 0
+                      ? `${p.model_catalog_count} 个 · ${fmtTime(p.model_catalog_fetched_at)}`
+                      : "未拉取"}
+                  </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => fetchModels(p)}
-                        disabled={panelOpen && modelsPanel?.provider.id === p.id && modelsPanel.models === null && !modelsPanel.error}
+                        disabled={panelOpen && modelsPanel?.provider.id === p.id && (modelsPanel.models === null || modelsPanel.refreshing)}
                       >
-                        {panelOpen && modelsPanel?.provider.id === p.id && modelsPanel.models === null && !modelsPanel.error ? (
+                        {panelOpen && modelsPanel?.provider.id === p.id && (modelsPanel.models === null || modelsPanel.refreshing) ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : null}
-                        拉取模型
+                        {p.model_catalog_count > 0 ? "再次拉取" : "拉取模型"}
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => setEditing(p)}>
                         编辑
@@ -278,7 +337,7 @@ function ProvidersTab({
           <Card>
             <CardHeader className="flex-row items-start justify-between space-y-0">
               <CardTitle className="flex items-center gap-1.5 text-base">
-                从 {modelsPanel?.provider.name} 获取的模型
+                {modelsPanel?.provider.name} 的可用模型
                 <HelpTip text="选择一个模型创建 Deployment（同时自动建立 canonical Model）" />
               </CardTitle>
               <Button size="icon" variant="ghost" onClick={() => setPanelOpen(false)}>
@@ -286,19 +345,39 @@ function ProvidersTab({
               </Button>
             </CardHeader>
             <CardContent>
+              {modelsPanel && (
+                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>
+                    {modelsPanel.fetchedAt ? `上次拉取：${fmtTime(modelsPanel.fetchedAt)}` : "尚未拉取"}
+                    {modelsPanel.fromCache ? " · 上次结果" : " · 刚刚更新"}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => fetchModels(modelsPanel.provider)}
+                    disabled={modelsPanel.refreshing}
+                  >
+                    {modelsPanel.refreshing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    再次拉取
+                  </Button>
+                </div>
+              )}
               {modelsPanel && modelsPanel.models === null && !modelsPanel.error && (
                 <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
                   <Loader2 className="h-6 w-6 animate-spin" />
                   <span className="text-sm">正在拉取模型列表…</span>
                 </div>
               )}
-              {modelsPanel?.error && (
+              {modelsPanel?.error && modelsPanel.models === null && (
                 <div className="flex h-40 flex-col items-center justify-center gap-3">
                   <p className="text-sm text-destructive">{modelsPanel.error}</p>
                   <Button size="sm" variant="outline" onClick={() => fetchModels(modelsPanel.provider)}>
                     重试
                   </Button>
                 </div>
+              )}
+              {modelsPanel?.error && modelsPanel.models !== null && (
+                <p className="mb-2 text-xs text-destructive">{modelsPanel.error}</p>
               )}
               {modelsPanel?.models && (
                 <div className="max-h-[60vh] space-y-1 overflow-auto">
@@ -562,6 +641,7 @@ function DeploymentsTab({
                 <SelectValue placeholder="选择模型" />
               </SelectTrigger>
               <SelectContent>
+                {models.length === 0 && <SelectEmpty>暂无模型（可在 Provider 页拉取模型后创建）</SelectEmpty>}
                 {models.map((m) => (
                   <SelectItem key={m.id} value={m.id}>
                     {m.display_name}
@@ -577,6 +657,7 @@ function DeploymentsTab({
                 <SelectValue placeholder="选择渠道" />
               </SelectTrigger>
               <SelectContent>
+                {providers.length === 0 && <SelectEmpty>暂无渠道（请先在 Provider 页添加）</SelectEmpty>}
                 {providers.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}（{p.type}）

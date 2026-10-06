@@ -13,7 +13,7 @@ import { HelpTip } from "@/components/HelpTip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectEmpty, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface TargetOption {
   key: string; // deployment_id:profile_id
@@ -171,6 +171,9 @@ export function NewRunPage() {
                 <SelectValue placeholder="选择已安装数据集" />
               </SelectTrigger>
               <SelectContent>
+                {installations.length === 0 && (
+                  <SelectEmpty>暂无已安装数据集（请先在「数据集」页安装）</SelectEmpty>
+                )}
                 {installations.map((i) => (
                   <SelectItem key={i.id} value={i.id}>
                     {i.dataset_name} v{i.dataset_version}（{i.dataset_revision}）
@@ -181,16 +184,25 @@ export function NewRunPage() {
           </div>
           <div className="space-y-1">
             <Label>Suite</Label>
-            <Select value={suiteId} onValueChange={setSuiteId} disabled={!selectedInstallation}>
+            <Select value={suiteId} onValueChange={setSuiteId}>
               <SelectTrigger>
                 <SelectValue placeholder="选择 suite" />
               </SelectTrigger>
               <SelectContent>
+                {!selectedInstallation && <SelectEmpty>请先选择数据集</SelectEmpty>}
+                {selectedInstallation && selectedInstallation.suites.length === 0 && (
+                  <SelectEmpty>该数据集没有 suite</SelectEmpty>
+                )}
                 {selectedInstallation?.suites.map((s) => (
                   <SelectItem key={s.id} value={s.id} disabled={s.task_count === 0}>
                     {s.name}（{s.task_count} 题{s.task_count === 0 ? "，不可运行" : ""}）
                   </SelectItem>
                 ))}
+                {selectedInstallation &&
+                  selectedInstallation.suites.length > 0 &&
+                  selectedInstallation.suites.every((s) => s.task_count === 0) && (
+                    <SelectEmpty>该数据集的 suite 暂无可运行任务</SelectEmpty>
+                  )}
               </SelectContent>
             </Select>
           </div>

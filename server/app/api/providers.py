@@ -8,7 +8,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Deployment, JudgeExecution, Model, Provider, ReasoningProfile, SolverExecution
+from ..models import (
+    Deployment,
+    JudgeExecution,
+    Model,
+    Provider,
+    ProviderModelCatalog,
+    ReasoningProfile,
+    SolverExecution,
+    utcnow,
+)
 from ..runtime.factory import PROVIDER_TYPE_DEFAULTS
 from ..schemas import (
     DeploymentCreate,
@@ -28,7 +37,7 @@ router = APIRouter(prefix="/api", tags=["setup"])
 # ---------------------------------------------------------------------------
 
 
-def provider_dict(p: Provider) -> dict:
+def provider_dict(p: Provider, catalog: ProviderModelCatalog | None = None) -> dict:
     return {
         "id": p.id,
         "name": p.name,
@@ -36,6 +45,9 @@ def provider_dict(p: Provider) -> dict:
         "base_url": p.base_url,
         "has_credential": credentials.has_credential(p.credential_ref),
         "created_at": p.created_at,
+        # 已拉取的模型列表摘要（供界面展示“再次拉取”与查看缓存）
+        "model_catalog_count": len(catalog.models) if catalog is not None else 0,
+        "model_catalog_fetched_at": catalog.fetched_at if catalog is not None else None,
     }
 
 
@@ -97,7 +109,12 @@ def list_provider_types() -> dict:
 
 @router.get("/providers")
 def list_providers(db: Session = Depends(get_db)) -> list[dict]:
-    return [provider_dict(p) for p in db.scalars(sa.select(Provider).order_by(Provider.created_at))]
+    providers = db.scalars(sa.select(Provider).order_by(Provider.created_at)).all()
+    catalogs = {
+        row.provider_id: row
+        for row in db.scalars(sa.select(ProviderModelCatalog)).all()
+    }
+    return [provider_dict(p, catalogs.get(p.id)) for p in providers]
 
 
 @router.post("/providers", status_code=201)
@@ -147,19 +164,15 @@ def delete_provider(provider_id: str, db: Session = Depends(get_db)) -> None:
         raise HTTPException(409, "provider 仍被 Deployment 引用，不能删除")
     if provider.credential_ref:
         credentials.delete_api_key(provider.credential_ref)
+    db.query(ProviderModelCatalog).filter(ProviderModelCatalog.provider_id == provider_id).delete()
     db.delete(provider)
     db.commit()
 
 
-@router.get("/providers/{provider_id}/models")
-def list_provider_models(provider_id: str, db: Session = Depends(get_db)) -> dict:
-    """从 Provider 拉取可用模型列表（OpenAI 风格 GET /models，尽力而为）。"""
-    provider = db.get(Provider, provider_id)
-    if provider is None:
-        raise HTTPException(404, "provider 不存在")
-
+def _fetch_provider_models(provider: Provider) -> list[str]:
+    """向上游请求可用模型列表（OpenAI 风格 GET /models）。"""
     if provider.type == "mock":
-        return {"models": ["mock-strong", "mock-weak"]}
+        return ["mock-strong", "mock-weak"]
 
     base = (provider.base_url or "").rstrip("/")
     if not base:
@@ -182,7 +195,40 @@ def list_provider_models(provider_id: str, db: Session = Depends(get_db)) -> dic
         raise HTTPException(502, f"拉取模型列表失败: {exc}") from exc
 
     items = data.get("data", [])
-    return {"models": sorted(str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id"))}
+    return sorted(str(item.get("id")) for item in items if isinstance(item, dict) and item.get("id"))
+
+
+@router.get("/providers/{provider_id}/models")
+def list_provider_models(provider_id: str, refresh: bool = False, db: Session = Depends(get_db)) -> dict:
+    """返回 Provider 的可用模型列表。
+
+    默认优先返回上次拉取的缓存（from_cache=true），界面无需重复请求上游；
+    refresh=true 强制重新拉取并更新缓存；首次访问（无缓存）自动拉取并保存。
+    """
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "provider 不存在")
+
+    catalog = db.scalar(
+        sa.select(ProviderModelCatalog).where(ProviderModelCatalog.provider_id == provider_id)
+    )
+    if not refresh and catalog is not None:
+        return {
+            "models": catalog.models,
+            "fetched_at": catalog.fetched_at,
+            "from_cache": True,
+        }
+
+    models = _fetch_provider_models(provider)
+    if catalog is None:
+        catalog = ProviderModelCatalog(provider_id=provider_id, models=models, fetched_at=utcnow())
+        db.add(catalog)
+    else:
+        catalog.models = models
+        catalog.fetched_at = utcnow()
+    db.commit()
+    db.refresh(catalog)
+    return {"models": models, "fetched_at": catalog.fetched_at, "from_cache": False}
 
 
 # ---------------------------------------------------------------------------
