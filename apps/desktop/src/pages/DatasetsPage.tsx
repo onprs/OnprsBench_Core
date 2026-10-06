@@ -4,6 +4,7 @@ import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
 import { isDesktopApp, listenDirectoryDrop, pickArchiveFile, pickDirectory } from "@/lib/desktop";
 import { Badge } from "@/components/ui/badge";
+import { CompactList } from "@/components/CompactList";
 import { HelpTip } from "@/components/HelpTip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -229,7 +230,7 @@ export function DatasetsPage() {
                   <TableCell>{inst.dataset_version}</TableCell>
                   <TableCell>
                     {inst.distribution === "full" ? (
-                      <Badge variant="success">完整（离线）</Badge>
+                      <Badge variant="success">完整</Badge>
                     ) : (
                       <Badge variant="secondary">标准</Badge>
                     )}
@@ -237,13 +238,7 @@ export function DatasetsPage() {
                   <TableCell className="font-mono text-xs">{inst.dataset_revision}</TableCell>
                   <TableCell>v{inst.protocol_version}</TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {inst.suites.map((s) => (
-                        <Badge key={s.id} variant="secondary">
-                          {s.name}（{s.task_count}）
-                        </Badge>
-                      ))}
-                    </div>
+                    <CompactList items={inst.suites.map((s) => `${s.name}（${s.task_count}）`)} />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{fmtTime(inst.installed_at)}</TableCell>
                   <TableCell>
