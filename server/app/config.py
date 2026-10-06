@@ -28,6 +28,14 @@ class Settings(BaseModel):
     # 单次模型调用超时（秒）
     llm_timeout_s: float = 600.0
 
+    # ---- Agent 形态 Solver（带工作区的任务，如 issue_resolution） ----
+    # 开启后，带 SWE 判定契约的任务由 agent 在仓库工作副本中多轮修复（而非单轮盲答）
+    agent_solver_enabled: bool = True
+    # agent 最大工具循环轮次
+    agent_max_turns: int = 40
+    # agent 单条命令超时（秒）
+    agent_command_timeout_s: int = 120
+
     # ---- 程序判定（verifier） ----
     # 总开关；关闭后所有任务退化为纯 LLM 评分
     verifier_enabled: bool = True

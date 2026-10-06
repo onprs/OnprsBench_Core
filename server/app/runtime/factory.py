@@ -24,9 +24,10 @@ PROVIDER_TYPE_DEFAULTS: dict[str, dict] = {
 def build_client(deployment: Deployment, provider: Provider) -> ModelClient:
     """根据 Deployment 配置构建模型客户端。"""
     if provider.type == "mock":
-        # mock 延迟可通过 deployment custom_options 调节（如 {"mock_latency_s": 1.0}）
+        # mock 延迟与 agent 行为脚本可通过 deployment custom_options 调节
         latency = float(deployment.custom_options.get("mock_latency_s", 0.05))
-        return MockClient(api_model_name=deployment.api_model_name, latency_s=latency)
+        agent_script = deployment.custom_options.get("agent_script")
+        return MockClient(api_model_name=deployment.api_model_name, latency_s=latency, agent_script=agent_script)
 
     api_key = get_api_key(provider.credential_ref) if provider.credential_ref else None
     api_base = deployment.endpoint_override or provider.base_url

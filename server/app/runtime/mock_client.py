@@ -14,7 +14,7 @@ import json
 import re
 from typing import Any
 
-from .base import CallTimer, ModelRequest, ModelResult, UsageInfo
+from .base import CallTimer, ModelRequest, ModelResult, ToolCall, ToolStep, UsageInfo
 
 # judge prompt 模板中的固定标记，mock client 据此切换行为
 JUDGE_PROMPT_MARKER = "Candidate Response #A"
@@ -29,11 +29,70 @@ def _estimate_tokens(text: str) -> int:
 
 
 class MockClient:
-    """确定性 mock。api_model_name 可携带行为提示，如 'mock-strong' / 'mock-weak'。"""
+    """确定性 mock。api_model_name 可携带行为提示，如 'mock-strong' / 'mock-weak'。
 
-    def __init__(self, api_model_name: str = "mock-model", latency_s: float = 0.05) -> None:
+    agent 模式（complete_with_tools）：通过 agent_script 注入动作序列
+    （[{"tool": "write_file", "arguments": {...}}, ..., {"text": "最终回答"}]），
+    供测试驱动工具循环；无脚本时退化为直接文本回答。
+    """
+
+    def __init__(
+        self,
+        api_model_name: str = "mock-model",
+        latency_s: float = 0.05,
+        agent_script: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._name = api_model_name
         self._latency_s = latency_s
+        self._agent_script = list(agent_script or [])
+        self._agent_cursor = 0
+
+    async def complete_with_tools(self, request: ModelRequest, tools: list[dict[str, Any]]) -> ToolStep:
+        await asyncio.sleep(self._latency_s)
+        action = (
+            self._agent_script[self._agent_cursor]
+            if self._agent_cursor < len(self._agent_script)
+            else None
+        )
+        self._agent_cursor += 1
+        prompt_text = "\n".join(str(m.get("content", "")) for m in request.messages)
+        usage = UsageInfo(
+            input_tokens=_estimate_tokens(prompt_text),
+            cached_input_tokens=0,
+            output_tokens=8,
+            reasoning_tokens=0,
+        )
+        if action is not None and "tool" in action:
+            call = ToolCall(
+                id=f"mock-call-{self._agent_cursor}",
+                name=str(action["tool"]),
+                arguments=dict(action.get("arguments") or {}),
+            )
+            return ToolStep(
+                content="",
+                tool_calls=[call],
+                assistant_message={
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {"name": call.name, "arguments": json.dumps(call.arguments, ensure_ascii=False)},
+                        }
+                    ],
+                },
+                usage=usage,
+                raw_response={"mock": True, "agent_action": action["tool"]},
+            )
+        text = str((action or {}).get("text") or "mock agent 已完成工作区修改")
+        return ToolStep(
+            content=text,
+            tool_calls=[],
+            assistant_message={"role": "assistant", "content": text},
+            usage=usage,
+            raw_response={"mock": True},
+        )
 
     async def complete(self, request: ModelRequest) -> ModelResult:
         timer = CallTimer()

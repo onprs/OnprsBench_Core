@@ -57,6 +57,34 @@ class ModelClient(Protocol):
     async def complete(self, request: ModelRequest) -> ModelResult: ...
 
 
+@dataclass
+class ToolCall:
+    """一次工具调用请求（模型输出）。"""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
+class ToolStep:
+    """一轮带工具调用的模型输出。"""
+
+    content: str
+    tool_calls: list[ToolCall]
+    assistant_message: dict[str, Any]  # 可原样回放进 messages 的 assistant 消息
+    usage: UsageInfo
+    raw_response: dict[str, Any] | None = None
+
+
+class ToolsCapableClient(Protocol):
+    """支持 function calling 的客户端协议（agent 循环使用）。"""
+
+    async def complete_with_tools(
+        self, request: ModelRequest, tools: list[dict[str, Any]]
+    ) -> ToolStep: ...
+
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 

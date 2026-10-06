@@ -27,22 +27,35 @@ reasoning effort 都是独立的 Deployment / Profile。
 
 ## 2. 关键决策
 
-### 2.1 模型调用层：LiteLLM + 自有 runtime 抽象（MVP 未直接嵌入 Inspect AI）
+### 2.1 模型调用层：LiteLLM + 自有 runtime 抽象（含 agent 循环；不嵌入 Inspect AI）
 
-AGENTS.md 默认选型是 Inspect AI 作为 eval runtime。实现前评估后决定 MVP 不直接嵌入，
-理由：
+AGENTS.md 默认选型是 Inspect AI 作为 eval runtime。两次评估后决定不直接嵌入：
 
 1. Inspect 的执行模型（`eval()` / `eval_set()`、`.eval` 日志文件、自有 retry/resume）
    与本项目要求的「SQLite 中保存 immutable raw facts、逐条 solver/judge execution 落库、
-   多 Judge 并行编排、Judge 匿名化、不重跑 Solver 的重评分」高度重叠且冲突：
-   自研部分（Multi-Judge 编排、聚合、分歧分析）恰好位于 Inspect scorer 所在层，
-   真正可复用的只剩并发与重试，而它们只是 asyncio 的薄封装。
+   多 Judge 并行编排、Judge 匿名化、不重跑 Solver 的重评分」高度重叠且冲突。
 2. Inspect 的日志格式与我们的关系型存储需要双向转换，增加出错面。
+3. （0.3.276 实测）Inspect 的 react agent 无法脱离其 eval sample 上下文独立运行——
+   `inspect_ai.agent.run(react(...))` 在无 active sample 时抛
+   `RuntimeError: checkpointer() must be called inside an active sample`，
+   其上下文依赖未公开为稳定 API。因此 agent 零件同样无法复用。
 
-当前方案：`app/runtime/base.py` 定义 `ModelClient` 协议（输入 `ModelRequest`，输出
-含 usage/时间戳/延迟的 `ModelResult`），业务层只依赖该协议；`litellm_client.py` 是
-LiteLLM driver；`mock_client.py` 是确定性离线 driver。后续如需引入 Inspect AI，可在
-该抽象层新增 adapter，数据模型与协议不变。
+当前方案：`app/runtime/base.py` 定义 `ModelClient`（单轮）与 `ToolsCapableClient`
+（function calling）协议；`litellm_client.py` 是 LiteLLM driver；`mock_client.py`
+是确定性离线 driver（支持 `agent_script` 脚本化动作）。
+`app/agents/loop.py` 基于 ToolsCapableClient 实现多轮工具循环（约百行，不引入框架依赖）。
+后续如需引入 Inspect AI，可在该抽象层新增 adapter，数据模型与协议不变。
+
+### 2.1.1 Agent 形态 Solver
+
+带仓库契约的任务（`verify.yaml` 含 `base_commit`，如 issue_resolution）不再让 solver
+盲答：runner 把安装时预取的仓库快照复制为工作副本，`app/agents/` 的多轮循环驱动模型
+在其中执行 list_files / read_file / write_file / search_text / run_command
+（路径限制在工作区内，命令限时限量）。结束后把工作副本与纯净快照的差异生成为
+unified diff（纯 Python，不依赖 git），拼接进 `response_text` 的 ```diff 围栏——
+下游程序判定与 Judge 流程与单轮形态完全一致。
+完整消息轨迹、轮次、聚合 usage 存入 `solver_executions.raw_response_json`
+（immutable）。快照无法供给时降级为单轮问答并记录 `solver_mode: oneshot_fallback`。
 
 ### 2.2 价格解析
 

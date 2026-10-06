@@ -9,7 +9,7 @@ from typing import Any
 
 import litellm
 
-from .base import CallTimer, ModelRequest, ModelResult, UsageInfo
+from .base import CallTimer, ModelRequest, ModelResult, ToolCall, ToolStep, UsageInfo
 
 # LiteLLM 不允许同时传 temperature/top_p 与部分 reasoning 参数等由 provider 决定，
 # 这里只做 None 过滤，具体兼容性交给 LiteLLM 与各 provider。
@@ -33,6 +33,54 @@ class LiteLLMClient:
         self._custom_options = custom_options or {}
 
     async def complete(self, request: ModelRequest) -> ModelResult:
+        kwargs = self._base_kwargs(request)
+        timer = CallTimer()
+        response = await litellm.acompletion(**kwargs)
+        finished_at, total_latency = timer.finish()
+
+        choice = response.choices[0]
+        text = choice.message.content or ""
+        usage = self._extract_usage(response)
+        raw = self._to_dict(response)
+
+        return ModelResult(
+            text=text,
+            raw_response=raw,
+            usage=usage,
+            started_at=timer.started_at,
+            finished_at=finished_at,
+            total_latency_s=total_latency,
+            ttft_s=None,  # 非流式调用无 TTFT，见 base.ModelResult 注释
+            generation_time_s=None,
+        )
+
+    async def complete_with_tools(self, request: ModelRequest, tools: list[dict[str, Any]]) -> ToolStep:
+        """带 function calling 的一次调用（agent 循环用）。"""
+        import json
+
+        kwargs = self._base_kwargs(request)
+        kwargs["tools"] = tools
+        response = await litellm.acompletion(**kwargs)
+
+        message = response.choices[0].message
+        tool_calls: list[ToolCall] = []
+        for tc in message.tool_calls or []:
+            try:
+                arguments = json.loads(tc.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+            tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=arguments))
+
+        return ToolStep(
+            content=message.content or "",
+            tool_calls=tool_calls,
+            assistant_message=message.model_dump(exclude_none=True),
+            usage=self._extract_usage(response),
+            raw_response=self._to_dict(response),
+        )
+
+    def _base_kwargs(self, request: ModelRequest) -> dict[str, Any]:
+        """组装 litellm 调用参数（complete / complete_with_tools 共用）。"""
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": request.messages,
@@ -55,26 +103,7 @@ class LiteLLMClient:
         # Deployment 级与 Profile 级 provider 专属参数
         kwargs.update(self._custom_options)
         kwargs.update(request.provider_params)
-
-        timer = CallTimer()
-        response = await litellm.acompletion(**kwargs)
-        finished_at, total_latency = timer.finish()
-
-        choice = response.choices[0]
-        text = choice.message.content or ""
-        usage = self._extract_usage(response)
-        raw = self._to_dict(response)
-
-        return ModelResult(
-            text=text,
-            raw_response=raw,
-            usage=usage,
-            started_at=timer.started_at,
-            finished_at=finished_at,
-            total_latency_s=total_latency,
-            ttft_s=None,  # 非流式调用无 TTFT，见 base.ModelResult 注释
-            generation_time_s=None,
-        )
+        return kwargs
 
     @staticmethod
     def _extract_usage(response: Any) -> UsageInfo:

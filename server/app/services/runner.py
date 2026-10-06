@@ -38,6 +38,9 @@ from ..models import (
 from ..runtime.base import ModelRequest
 from ..runtime.factory import build_client
 from ..toolchain import ToolchainUnavailable
+from ..toolchain import repos as repo_toolchain
+from ..agents.diff import diff_workspace
+from ..agents.loop import run_agent_loop
 from ..verifier import service as verifier_service
 from . import aggregation, datasets, prompts
 from .pricing import ResolvedPricing, compute_cost, resolve_pricing
@@ -141,6 +144,124 @@ def _record_usage(
     return cost
 
 
+def _task_repo_contract(task_payload: dict) -> tuple[str, str] | None:
+    """任务声明的仓库契约（repo_url, base_commit），无则 None。"""
+    verify = task_payload.get("verify")
+    if not isinstance(verify, dict):
+        return None
+    base_commit = verify.get("base_commit")
+    repo_url = verify.get("repo_url") or (
+        f"https://github.com/{verify['repo']}" if verify.get("repo") else None
+    )
+    if repo_url and base_commit:
+        return str(repo_url), str(base_commit)
+    return None
+
+
+async def _call_solver(
+    spec: TargetSpec,
+    task: TaskCache,
+    execution_id: str,
+) -> tuple[str, list[dict], dict | None, object, datetime, datetime, float]:
+    """执行一次 Solver 调用。
+
+    返回 (response_text, prompt_messages, raw_response, usage, started_at, finished_at, latency)。
+    带仓库契约的任务走 agent 形态（工作区多轮修复，diff 作为回答）；
+    快照无法供给时降级为单轮问答并记录原因。
+    """
+    client = build_client(spec.deployment, spec.provider)
+    task_payload = task.payload
+    contract = _task_repo_contract(task_payload)
+
+    if settings.agent_solver_enabled and contract is not None and hasattr(client, "complete_with_tools"):
+        repo_url, base_commit = contract
+        work_dir = (settings.verify_workspace_dir / f"solver-{execution_id}").resolve()
+        try:
+            snapshot = repo_toolchain.fetch_repo_snapshot(repo_url, base_commit)
+            workspace = repo_toolchain.materialize_workspace(snapshot, work_dir / "repo")
+        except ToolchainUnavailable as exc:
+            logger.warning("solver 工作区无法供给，降级为单轮问答 task=%s: %s", task.task_id, exc)
+            shutil.rmtree(work_dir, ignore_errors=True)
+            return await _call_solver_oneshot(spec, task_payload, client, fallback_reason=str(exc))
+
+        try:
+            result = await run_agent_loop(
+                client,
+                problem=task_payload["solver_visible"]["problem"],
+                workspace=workspace,
+                max_turns=settings.agent_max_turns,
+                command_timeout_s=settings.agent_command_timeout_s,
+                timeout_s=settings.llm_timeout_s,
+            )
+            if result.stop_reason == "error":
+                raise RuntimeError(result.error or "agent 执行失败")
+            patch = diff_workspace(snapshot, workspace)
+            response_text = result.final_text or "（agent 未给出文字总结）"
+            if patch.strip():
+                response_text += "\n\n```diff\n" + patch + "```\n"
+            prompt_messages = result.messages[:2]  # 初始 system + user
+            raw = {
+                "solver_mode": "agent",
+                "turns": result.turns,
+                "stop_reason": result.stop_reason,
+                "messages": result.messages,
+                "patch_chars": len(patch),
+            }
+            usage = _usage_of(
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                cached=result.cached_input_tokens,
+                reasoning=result.reasoning_tokens,
+            )
+            return (
+                response_text,
+                prompt_messages,
+                raw,
+                usage,
+                result.started_at,
+                result.finished_at,
+                result.wall_time_s,
+            )
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    return await _call_solver_oneshot(spec, task_payload, client, fallback_reason=None)
+
+
+async def _call_solver_oneshot(
+    spec: TargetSpec,
+    task_payload: dict,
+    client,
+    fallback_reason: str | None,
+):
+    """单轮问答形态的 Solver 调用（原有路径）。"""
+    messages = prompts.build_solver_messages(task_payload)
+    result = await client.complete(spec.build_request(messages))
+    raw = result.raw_response
+    if fallback_reason:
+        raw = {**(raw or {}), "solver_mode": "oneshot_fallback", "fallback_reason": fallback_reason}
+    return (
+        result.text,
+        messages,
+        raw,
+        result.usage,
+        result.started_at,
+        result.finished_at,
+        result.total_latency_s,
+    )
+
+
+def _usage_of(*, input_tokens, output_tokens, cached, reasoning):
+    from ..runtime.base import UsageInfo
+
+    return UsageInfo(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached,
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning,
+    )
+
+
 async def _run_solver_call(
     run_id: str,
     spec: TargetSpec,
@@ -164,15 +285,16 @@ async def _run_solver_call(
                 profile_name=spec.profile.name if spec.profile else None,
                 status="running",
                 started_at=utcnow(),
-                prompt_json=messages,
+                prompt_json=None,  # agent 形态在调用后回填实际初始消息
             )
             session.add(execution)
             session.flush()
             execution_id = execution.id
 
-        client = build_client(spec.deployment, spec.provider)
         try:
-            result = await client.complete(spec.build_request(messages))
+            response_text, messages, raw, usage, started, finished, latency = await _call_solver(
+                spec, task, execution_id
+            )
         except Exception as exc:
             logger.warning("solver 调用失败 run=%s task=%s: %s", run_id, task.task_id, exc)
             with session_scope() as session:
@@ -185,19 +307,20 @@ async def _run_solver_call(
         with session_scope() as session:
             row = session.get(SolverExecution, execution_id)
             row.status = "completed"
-            row.finished_at = result.finished_at
-            row.started_at = result.started_at
-            row.ttft_s = result.ttft_s
-            row.generation_time_s = result.generation_time_s
-            row.total_latency_s = result.total_latency_s
-            row.response_text = result.text
-            row.raw_response_json = result.raw_response
+            row.finished_at = finished
+            row.started_at = started
+            row.ttft_s = None
+            row.generation_time_s = None
+            row.total_latency_s = latency
+            row.prompt_json = messages
+            row.response_text = response_text
+            row.raw_response_json = raw
 
         _record_usage(
             run_id=run_id,
             owner_type="solver",
             owner_id=execution_id,
-            usage=result.usage,
+            usage=usage,
             pricing=pricing.get(spec.deployment.id),
         )
         return execution_id
