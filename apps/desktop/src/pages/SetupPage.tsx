@@ -293,34 +293,22 @@ function ProvidersTab({
             </TableHeader>
             <TableBody>
               {providers.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell className="whitespace-nowrap">
-                    <button
-                      type="button"
-                      className="underline-offset-2 hover:underline"
-                      title="查看已拉取的模型列表"
-                      onClick={() => void showCachedModels(p)}
-                    >
-                      {p.name}
-                    </button>
-                  </TableCell>
+                <TableRow
+                  key={p.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  title="查看已拉取的模型列表"
+                  onClick={() => void showCachedModels(p)}
+                >
+                  <TableCell className="whitespace-nowrap font-medium">{p.name}</TableCell>
                   <TableCell>{p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {p.model_catalog_count > 0 ? (
-                      <button
-                        type="button"
-                        className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                        title="查看已拉取的模型列表"
-                        onClick={() => void showCachedModels(p)}
-                      >
-                        {p.model_catalog_count} 个 · {fmtTime(p.model_catalog_fetched_at)}
-                      </button>
-                    ) : (
-                      <span className="text-muted-foreground">未拉取</span>
-                    )}
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                    {p.model_catalog_count > 0
+                      ? `${p.model_catalog_count} 个 · ${fmtTime(p.model_catalog_fetched_at)}`
+                      : "未拉取"}
                   </TableCell>
-                  <TableCell>
+                  {/* 操作列阻止冒泡，避免点按钮时同时打开模型面板 */}
+                  <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex gap-1">
                       <Button
                         size="sm"
