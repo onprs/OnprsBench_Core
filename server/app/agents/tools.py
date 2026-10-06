@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+
+from ..config import settings
+from . import sandbox
 
 _OUTPUT_LIMIT = 8000
 _READ_LIMIT = 20000
@@ -79,7 +83,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "run_command",
-            "description": "在工作区根目录执行 shell 命令（有超时；输出截断）",
+            "description": "在工作区根目录执行命令（有超时；输出截断）。只支持允许名单内的命令（python / g++ / 查看搜索类），使用相对路径，不支持管道与重定向，不支持联网与工作区外访问",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -109,9 +113,19 @@ def _tail(text: str, limit: int = _OUTPUT_LIMIT) -> str:
 class WorkspaceTools:
     """绑定到 workspace 的工具执行器。"""
 
-    def __init__(self, workspace: Path, *, command_timeout_s: int = 120) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        command_timeout_s: int = 120,
+        sandbox_mode: str | None = None,
+    ) -> None:
         self.workspace = workspace.resolve()
         self.command_timeout_s = command_timeout_s
+        # enforce：拒绝违规命令；audit：只记录不阻断（调试/兼容模式）
+        self.sandbox_mode = sandbox_mode or settings.agent_sandbox_mode
+        # run_command 审计记录（供原始事实留痕）
+        self.command_audit: list[dict[str, Any]] = []
         self._handlers: dict[str, Callable[..., Awaitable[str]]] = {
             "list_files": self._list_files,
             "read_file": self._read_file,
@@ -120,23 +134,45 @@ class WorkspaceTools:
             "run_command": self._run_command,
         }
 
-    async def dispatch(self, name: str, arguments: dict[str, Any]) -> str:
+    async def dispatch(
+        self, name: str, arguments: dict[str, Any], *, turn: int | None = None
+    ) -> str:
         """执行一次工具调用，返回工具输出文本（异常转为错误文本，不抛出）。"""
         handler = self._handlers.get(name)
         if handler is None:
             return f"未知工具: {name}"
         try:
+            if name == "run_command":
+                return await self._run_command(**arguments, turn=turn)
             return await handler(**arguments)
         except TypeError as exc:
             return f"工具参数错误: {exc}"
         except (OSError, ValueError) as exc:
             return f"工具执行失败: {exc}"
 
+    def _record_command(
+        self,
+        command: str,
+        *,
+        turn: int | None,
+        decision: sandbox.CommandDecision,
+        blocked: bool,
+    ) -> None:
+        self.command_audit.append(
+            {
+                "turn": turn,
+                "command": command[:500],
+                "reasons": decision.reasons or ([decision.reason] if decision.reason else []),
+                "blocked": blocked,
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
     async def _list_files(self, path: str = ".") -> str:
         root = _resolve(self.workspace, path)
         if not root.is_dir():
             return f"目录不存在: {path}"
-        skip = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache"}
+        skip = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache", ".sandbox"}
         lines: list[str] = []
         for p in sorted(root.rglob("*")):
             rel = p.relative_to(root)
@@ -171,7 +207,7 @@ class WorkspaceTools:
         root = _resolve(self.workspace, path)
         hits: list[str] = []
         for p in sorted(root.rglob("*")):
-            if not p.is_file() or any(part in {".git", ".venv", "__pycache__"} for part in p.parts):
+            if not p.is_file() or any(part in {".git", ".venv", "__pycache__", ".sandbox"} for part in p.parts):
                 continue
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
@@ -184,21 +220,43 @@ class WorkspaceTools:
                         return "\n".join(hits) + "\n...（结果截断）"
         return "\n".join(hits) or "（无匹配）"
 
-    async def _run_command(self, command: str, timeout_s: int | None = None) -> str:
+    async def _run_command(
+        self, command: str, timeout_s: int | None = None, *, turn: int | None = None
+    ) -> str:
+        if not isinstance(command, str) or not command.strip():
+            return "命令为空"
         effective_timeout = min(timeout_s or self.command_timeout_s, self.command_timeout_s)
+
+        decision = sandbox.decide_command(command, self.workspace)
+        blocked = not decision.allowed and self.sandbox_mode == "enforce"
+        if decision.reasons or blocked:
+            self._record_command(command, turn=turn, decision=decision, blocked=blocked)
+        if blocked:
+            return (
+                f"沙箱拒绝执行（{decision.reason}）。"
+                "请使用允许名单内的命令（python / pytest / g++ 等）与工作区内相对路径，不要联网或访问工作区外内容。"
+            )
+
+        argv = decision.argv or sandbox.build_argv(command)
+        env = sandbox.build_child_env(self.workspace)
+        prefix = sandbox.network_isolation_prefix()
 
         def _run() -> str:
             try:
                 proc = subprocess.run(
-                    command,
-                    shell=True,
+                    [*prefix, *argv],
+                    shell=False,
                     cwd=self.workspace,
+                    stdin=subprocess.DEVNULL,  # agent 无法交互：读 stdin 的程序立即 EOF 退出
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
                     timeout=effective_timeout,
+                    env=env,
                 )
+            except FileNotFoundError:
+                return f"命令不存在: {argv[0]}"
             except subprocess.TimeoutExpired:
                 return f"命令超时（>{effective_timeout}s）已被终止"
             out = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
