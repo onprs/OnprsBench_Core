@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import { FolderOpen } from "lucide-react";
 import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
-import { fmtTime } from "@/lib/utils";
+import { cn, fmtTime } from "@/lib/utils";
+import { isDesktopApp, listenDirectoryDrop, pickDirectory } from "@/lib/desktop";
 import { Badge } from "@/components/ui/badge";
 import { HelpTip } from "@/components/HelpTip";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -17,6 +19,7 @@ export function DatasetsPage() {
   const [tasks, setTasks] = useState<DatasetTask[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const { confirm, confirmElement } = useConfirm();
 
   const reload = useCallback(async () => {
@@ -27,13 +30,15 @@ export function DatasetsPage() {
     void reload();
   }, [reload]);
 
-  async function install() {
+  async function install(target?: string) {
+    const directory = (target ?? path).trim();
+    if (!directory) return;
     setError(null);
     setInfo(null);
     try {
       const result = await api.post<{ created: boolean; installation: DatasetInstallation }>(
         "/api/datasets/installations",
-        { path }
+        { path: directory }
       );
       if (result.installation.distribution === "full") {
         setInfo("安装成功（完整数据集：判定资源已就绪，可离线判定）");
@@ -45,6 +50,27 @@ export function DatasetsPage() {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  // 桌面应用：监听原生拖入（拖入目录即开始安装）
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listenDirectoryDrop({
+      onDrop: (paths) => {
+        if (paths[0]) void install(paths[0]);
+      },
+      onDragStateChange: setDragging,
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+    // install 依赖 path，但其参数优先，拖入始终使用实际路径
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, reload]);
 
   async function showTasks(installationId: string) {
     setSelected(installationId);
@@ -80,11 +106,53 @@ export function DatasetsPage() {
           <div className="space-y-1">
             <Label>
               数据集目录
-              <HelpTip text="需包含符合 Dataset Protocol 的 manifest.json；安装前会做完整校验" />
+              <HelpTip text="需包含符合 Dataset Protocol 的 manifest.yaml；安装前会做完整校验" />
             </Label>
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                if (isDesktopApp()) return; // 桌面壳通过原生拖入事件处理
+                setError("浏览器模式无法读取拖入目录的路径，请在桌面应用中使用拖入或「选择目录」");
+              }}
+              className={cn(
+                "flex flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-center transition-colors",
+                dragging && "border-primary bg-accent/40"
+              )}
+            >
+              <FolderOpen className="h-5 w-5 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                {isDesktopApp()
+                  ? "将数据集目录拖到这里，或点击「选择目录」（拖入后自动安装）"
+                  : "桌面应用支持将数据集目录拖到这里或选择目录；浏览器模式请填写路径"}
+              </p>
+              {path && <p className="break-all font-mono text-xs">{path}</p>}
+            </div>
             <div className="flex gap-2">
-              <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/dataset" className="font-mono" />
-              <Button onClick={install} disabled={!path}>
+              <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="数据集目录路径" className="font-mono" />
+              {isDesktopApp() && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    void (async () => {
+                      const selected = await pickDirectory();
+                      if (selected) {
+                        setPath(selected);
+                        await install(selected);
+                      }
+                    })();
+                  }}
+                >
+                  <FolderOpen className="mr-1 h-4 w-4" />
+                  选择目录
+                </Button>
+              )}
+              <Button onClick={() => void install()} disabled={!path}>
                 校验并安装
               </Button>
             </div>
