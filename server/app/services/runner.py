@@ -158,11 +158,26 @@ def _task_repo_contract(task_payload: dict) -> tuple[str, str] | None:
     return None
 
 
+@dataclass
+class SolverCallOutcome:
+    """一次 Solver 调用的完整产出（oneshot 或 agent 形态统一）。"""
+
+    response_text: str
+    prompt_messages: list[dict]
+    raw_response: dict | None
+    usage: object
+    started_at: datetime
+    finished_at: datetime
+    total_latency_s: float
+    ttft_s: float | None = None
+    generation_time_s: float | None = None
+
+
 async def _call_solver(
     spec: TargetSpec,
     task: TaskCache,
     execution_id: str,
-) -> tuple[str, list[dict], dict | None, object, datetime, datetime, float]:
+) -> SolverCallOutcome:
     """执行一次 Solver 调用。
 
     返回 (response_text, prompt_messages, raw_response, usage, started_at, finished_at, latency)。
@@ -199,7 +214,6 @@ async def _call_solver(
             response_text = result.final_text or "（agent 未给出文字总结）"
             if patch.strip():
                 response_text += "\n\n```diff\n" + patch + "```\n"
-            prompt_messages = result.messages[:2]  # 初始 system + user
             raw = {
                 "solver_mode": "agent",
                 "turns": result.turns,
@@ -207,20 +221,19 @@ async def _call_solver(
                 "messages": result.messages,
                 "patch_chars": len(patch),
             }
-            usage = _usage_of(
-                input_tokens=result.input_tokens,
-                output_tokens=result.output_tokens,
-                cached=result.cached_input_tokens,
-                reasoning=result.reasoning_tokens,
-            )
-            return (
-                response_text,
-                prompt_messages,
-                raw,
-                usage,
-                result.started_at,
-                result.finished_at,
-                result.wall_time_s,
+            return SolverCallOutcome(
+                response_text=response_text,
+                prompt_messages=result.messages[:2],  # 初始 system + user
+                raw_response=raw,
+                usage=_usage_of(
+                    input_tokens=result.input_tokens,
+                    output_tokens=result.output_tokens,
+                    cached=result.cached_input_tokens,
+                    reasoning=result.reasoning_tokens,
+                ),
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+                total_latency_s=result.wall_time_s,
             )
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -233,21 +246,23 @@ async def _call_solver_oneshot(
     task_payload: dict,
     client,
     fallback_reason: str | None,
-):
+) -> SolverCallOutcome:
     """单轮问答形态的 Solver 调用（原有路径）。"""
     messages = prompts.build_solver_messages(task_payload)
     result = await client.complete(spec.build_request(messages))
     raw = result.raw_response
     if fallback_reason:
         raw = {**(raw or {}), "solver_mode": "oneshot_fallback", "fallback_reason": fallback_reason}
-    return (
-        result.text,
-        messages,
-        raw,
-        result.usage,
-        result.started_at,
-        result.finished_at,
-        result.total_latency_s,
+    return SolverCallOutcome(
+        response_text=result.text,
+        prompt_messages=messages,
+        raw_response=raw,
+        usage=result.usage,
+        started_at=result.started_at,
+        finished_at=result.finished_at,
+        total_latency_s=result.total_latency_s,
+        ttft_s=result.ttft_s,
+        generation_time_s=result.generation_time_s,
     )
 
 
@@ -292,9 +307,7 @@ async def _run_solver_call(
             execution_id = execution.id
 
         try:
-            response_text, messages, raw, usage, started, finished, latency = await _call_solver(
-                spec, task, execution_id
-            )
+            outcome = await _call_solver(spec, task, execution_id)
         except Exception as exc:
             logger.warning("solver 调用失败 run=%s task=%s: %s", run_id, task.task_id, exc)
             with session_scope() as session:
@@ -307,20 +320,20 @@ async def _run_solver_call(
         with session_scope() as session:
             row = session.get(SolverExecution, execution_id)
             row.status = "completed"
-            row.finished_at = finished
-            row.started_at = started
-            row.ttft_s = None
-            row.generation_time_s = None
-            row.total_latency_s = latency
-            row.prompt_json = messages
-            row.response_text = response_text
-            row.raw_response_json = raw
+            row.finished_at = outcome.finished_at
+            row.started_at = outcome.started_at
+            row.ttft_s = outcome.ttft_s
+            row.generation_time_s = outcome.generation_time_s
+            row.total_latency_s = outcome.total_latency_s
+            row.prompt_json = outcome.prompt_messages
+            row.response_text = outcome.response_text
+            row.raw_response_json = outcome.raw_response
 
         _record_usage(
             run_id=run_id,
             owner_type="solver",
             owner_id=execution_id,
-            usage=usage,
+            usage=outcome.usage,
             pricing=pricing.get(spec.deployment.id),
         )
         return execution_id

@@ -125,8 +125,8 @@ class MockClient:
             started_at=timer.started_at,
             finished_at=finished_at,
             total_latency_s=latency,
-            ttft_s=None,
-            generation_time_s=None,
+            ttft_s=latency * 0.4,  # 模拟值：mock 无真实流，给出确定性占位
+            generation_time_s=latency * 0.6,
         )
 
     def _solver_response(self, prompt_text: str) -> str:
