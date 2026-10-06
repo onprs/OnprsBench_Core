@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen } from "lucide-react";
+import { FileArchive, FolderOpen } from "lucide-react";
 import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
-import { isDesktopApp, listenDirectoryDrop, pickDirectory } from "@/lib/desktop";
+import { isDesktopApp, listenDirectoryDrop, pickArchiveFile, pickDirectory } from "@/lib/desktop";
 import { Badge } from "@/components/ui/badge";
 import { HelpTip } from "@/components/HelpTip";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -105,8 +105,8 @@ export function DatasetsPage() {
         <CardContent className="space-y-3">
           <div className="space-y-1">
             <Label>
-              数据集目录
-              <HelpTip text="需包含符合 Dataset Protocol 的 manifest.yaml；安装前会做完整校验" />
+              数据集目录或发布包
+              <HelpTip text="支持解压后的目录，或 .tar.gz / .tgz / .tar 发布包；需包含符合 Dataset Protocol 的 manifest.yaml，安装前会做完整校验" />
             </Label>
             <div
               onDragOver={(e) => {
@@ -118,7 +118,7 @@ export function DatasetsPage() {
                 e.preventDefault();
                 setDragging(false);
                 if (isDesktopApp()) return; // 桌面壳通过原生拖入事件处理
-                setError("浏览器模式无法读取拖入目录的路径，请在桌面应用中使用拖入或「选择目录」");
+                setError("浏览器模式无法读取拖入目录的路径，请在桌面应用中使用拖入或「选择目录 / 选择压缩包」");
               }}
               className={cn(
                 "flex flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-center transition-colors",
@@ -128,29 +128,46 @@ export function DatasetsPage() {
               <FolderOpen className="h-5 w-5 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
                 {isDesktopApp()
-                  ? "将数据集目录拖到这里，或点击「选择目录」（拖入后自动安装）"
-                  : "桌面应用支持将数据集目录拖到这里或选择目录；浏览器模式请填写路径"}
+                  ? "将数据集目录或压缩包拖到这里，或点击「选择目录 / 选择压缩包」（拖入后自动安装）"
+                  : "桌面应用支持将数据集目录或 .tar.gz 压缩包拖到这里或选择文件；浏览器模式请填写路径"}
               </p>
               {path && <p className="break-all font-mono text-xs">{path}</p>}
             </div>
-            <div className="flex gap-2">
-              <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="数据集目录路径" className="font-mono" />
+            <div className="flex flex-wrap gap-2">
+              <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="数据集目录或 .tar.gz 压缩包路径" className="font-mono" />
               {isDesktopApp() && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    void (async () => {
-                      const selected = await pickDirectory();
-                      if (selected) {
-                        setPath(selected);
-                        await install(selected);
-                      }
-                    })();
-                  }}
-                >
-                  <FolderOpen className="mr-1 h-4 w-4" />
-                  选择目录
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      void (async () => {
+                        const selected = await pickDirectory();
+                        if (selected) {
+                          setPath(selected);
+                          await install(selected);
+                        }
+                      })();
+                    }}
+                  >
+                    <FolderOpen className="mr-1 h-4 w-4" />
+                    选择目录
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      void (async () => {
+                        const selected = await pickArchiveFile();
+                        if (selected) {
+                          setPath(selected);
+                          await install(selected);
+                        }
+                      })();
+                    }}
+                  >
+                    <FileArchive className="mr-1 h-4 w-4" />
+                    选择压缩包
+                  </Button>
+                </>
               )}
               <Button onClick={() => void install()} disabled={!path}>
                 校验并安装

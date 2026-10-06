@@ -15,6 +15,18 @@ export async function pickDirectory(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+/** 选择数据集发布包（.tar.gz / .tgz / .tar）；取消或非桌面环境返回 null。 */
+export async function pickArchiveFile(): Promise<string | null> {
+  if (!isDesktopApp()) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    multiple: false,
+    title: "选择数据集压缩包",
+    filters: [{ name: "数据集压缩包", extensions: ["gz", "tgz", "tar"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 /** 监听桌面壳拖入事件，返回取消监听的函数（非桌面环境为空实现）。 */
 export async function listenDirectoryDrop(options: {
   onDrop: (paths: string[]) => void;

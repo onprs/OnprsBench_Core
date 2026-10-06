@@ -213,7 +213,10 @@ finish_reason`，Judge 据此区分“答错”与“输出被截断”（prompt
 weight + anchors rubric、anchors 校准回答、verify.yaml 程序判定契约、
 离线本地目录优先、为远程 registry 预留。
 
-安装时框架把数据集目录复制为数据目录下的托管副本（`datasets/<manifest_hash 前 16 位>/`），
+安装输入支持数据集目录与发布产物归档（`.tar.gz` / `.tgz` / `.tar`）：归档先安全解压到临时目录
+（拒绝绝对路径、父目录穿越与链接条目，解压体积上限 4GB）并自动定位 manifest.yaml，
+再按同一流程校验与安装，临时目录随后清理。安装时框架把数据集目录复制为数据目录下的托管副本
+（`datasets/<manifest_hash 前 16 位>/`），
 与原始目录解耦；bundle 内容组装为 `tasks.payload` 快照（problem 文本、rubric、
 reference 拼接、anchors、verify 契约、meta.yaml 元数据）。安装时按 manifest 声明
 与 `meta.yaml.visibility_overrides` 计算有效可见性：override 只能引用已登记文件，

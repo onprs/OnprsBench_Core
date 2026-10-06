@@ -45,18 +45,24 @@ def installation_dict(inst: DatasetInstallation) -> dict:
 
 @router.post("/installations", status_code=201)
 def install_dataset(body: DatasetInstall) -> dict:
-    """安装本地目录数据集（需包含符合 Dataset Protocol 的 manifest.yaml）。
+    """安装本地数据集：目录或 .tar.gz / .tgz / .tar 发布包。
 
-    standard 形态在安装时预取全部判定资源，任一项失败即中止安装（409，
-    返回失败项与提示）；full 形态直接注册附带的仓库归档，判定不联网。
+    归档会先安全解压到临时目录，再执行与目录安装完全相同的校验与安装流程；
+    standard 形态在安装时预取全部判定资源（任一项失败即中止并返回 409），
+    full 形态直接注册附带的仓库归档，判定不联网。
     """
     path = Path(body.path).expanduser()
-    if not path.is_dir():
-        raise HTTPException(400, f"目录不存在: {path}")
+    if not path.exists():
+        raise HTTPException(400, f"路径不存在: {path}")
     try:
-        with session_scope() as session:
-            installation, created, prefetch = dataset_service.install_dataset(session, path)
-            return {"installation": installation_dict(installation), "created": created, "prefetch": prefetch}
+        with dataset_service.open_dataset_source(path) as dataset_dir:
+            with session_scope() as session:
+                installation, created, resources = dataset_service.install_dataset(session, dataset_dir)
+                return {
+                    "installation": installation_dict(installation),
+                    "created": created,
+                    "prefetch": resources,
+                }
     except DatasetValidationError as exc:
         raise HTTPException(422, detail={"message": "数据集不符合 Dataset Protocol", "errors": exc.errors}) from exc
     except DatasetResourceError as exc:

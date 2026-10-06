@@ -65,7 +65,8 @@ DeepSeek / OpenAI 兼容 / Ollama），填写 API Key。Key 只保存在系统�
 
 本仓库不内置真实 benchmark 题目。配套数据集是独立项目
 [OnprsBench_Dataset](https://github.com/onprs/OnprsBench_Dataset)：下载其 Release 产物
-（含冻结的 manifest.yaml 与完整 hash 清单），在「数据集」页安装解压后的目录即可。
+（含冻结的 manifest.yaml 与完整 hash 清单），在「数据集」页直接安装 `.tar.gz` 发布包
+（也可解压后选择目录，桌面应用支持拖入）。
 同一版本号提供两套产物：标准数据集（导入时下载全部判定资源，下载失败则导入失败并提示改用完整版）与完整数据集 `-full`
 （附带仓库快照与许可，安装后判定不联网），按网络条件选用。
 数据集独立发版，每次 Run 冻结 dataset id/version/commit/manifest hash，历史可追溯。

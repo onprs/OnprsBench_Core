@@ -18,6 +18,10 @@ import json
 import logging
 import re
 import shutil
+import tarfile
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -33,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_PROTOCOL_VERSIONS = {"1"}
 SUPPORTED_DISTRIBUTIONS = {"standard", "full"}
+# 支持直接安装的数据集归档（发布产物为 .tar.gz）
+SUPPORTED_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar")
+# 归档解压后的体积上限（防止恶意/异常归档）
+_ARCHIVE_SIZE_LIMIT = 4 * 1024**3
 
 
 class DatasetValidationError(Exception):
@@ -313,6 +321,81 @@ def _validate_resources(dataset_dir: Path, manifest: dict) -> list[str]:
             ):
                 errors.append(f"{label}: 许可文件缺失或路径非法: {license_file}")
     return errors
+
+
+def is_dataset_archive(path: Path) -> bool:
+    """路径是否为受支持的归档文件（.tar.gz / .tgz / .tar）。"""
+    return path.is_file() and any(
+        path.name.lower().endswith(suffix) for suffix in SUPPORTED_ARCHIVE_SUFFIXES
+    )
+
+
+def _safe_extract_archive(archive: Path, dest: Path) -> None:
+    """安全解压数据集归档：拒绝绝对路径、父目录穿越与链接条目。"""
+    if not tarfile.is_tarfile(archive):
+        raise DatasetValidationError([f"不是合法的 tar 归档: {archive.name}"])
+    with tarfile.open(archive, "r:*") as tar:
+        total_bytes = 0
+        for member in tar.getmembers():
+            name = Path(member.name)
+            if name.is_absolute() or ".." in name.parts:
+                raise DatasetValidationError([f"归档包含非法路径: {member.name}"])
+            if member.issym() or member.islnk():
+                raise DatasetValidationError([f"归档包含链接条目（不支持）: {member.name}"])
+            total_bytes += max(member.size, 0)
+        if total_bytes > _ARCHIVE_SIZE_LIMIT:
+            raise DatasetValidationError(["归档解压后体积超过上限（4GB）"])
+        try:
+            # Python 3.11.4+ 支持 filter；旧版本已自行校验全部成员
+            tar.extractall(dest, filter="data")
+        except TypeError:
+            tar.extractall(dest)
+
+
+def locate_manifest_root(extracted: Path) -> Path:
+    """定位归档内 manifest.yaml 所在目录：根目录优先，其次唯一的候选目录。"""
+    if (extracted / "manifest.yaml").is_file():
+        return extracted
+    candidates = sorted(
+        {
+            manifest.parent
+            for manifest in extracted.rglob("manifest.yaml")
+            if len(manifest.relative_to(extracted).parts) <= 3
+        }
+    )
+    if not candidates:
+        raise DatasetValidationError(["归档内未找到 manifest.yaml"])
+    if len(candidates) > 1:
+        raise DatasetValidationError(
+            [
+                "归档内存在多个 manifest.yaml，无法确定数据集根: "
+                + ", ".join(str(candidate.relative_to(extracted)) for candidate in candidates)
+            ]
+        )
+    return candidates[0]
+
+
+@contextmanager
+def open_dataset_source(path: Path) -> Iterator[Path]:
+    """把安装输入统一为数据集目录：目录原样返回，归档解压到临时目录后返回。
+
+    临时目录在上下文退出时清理；安装流程已把内容复制到托管副本，
+    因此归档删除后历史仍可追溯。
+    """
+    if path.is_dir():
+        yield path
+        return
+    if not is_dataset_archive(path):
+        raise DatasetValidationError(
+            [
+                f"不支持的安装输入: {path}"
+                f"（应为数据集目录或 {', '.join(SUPPORTED_ARCHIVE_SUFFIXES)} 归档）"
+            ]
+        )
+    with tempfile.TemporaryDirectory(prefix="onprsbench-dataset-") as tmp:
+        extracted = Path(tmp)
+        _safe_extract_archive(path, extracted)
+        yield locate_manifest_root(extracted)
 
 
 def load_manifest(dataset_dir: Path) -> tuple[dict, str]:
