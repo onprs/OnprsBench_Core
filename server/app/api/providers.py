@@ -141,7 +141,7 @@ def create_provider(body: ProviderCreate, db: Session = Depends(get_db)) -> dict
 def update_provider(provider_id: str, body: ProviderUpdate, db: Session = Depends(get_db)) -> dict:
     provider = db.get(Provider, provider_id)
     if provider is None:
-        raise HTTPException(404, "provider 不存在")
+        raise HTTPException(404, "渠道不存在")
     if body.name is not None:
         provider.name = body.name
     if body.base_url is not None:
@@ -158,10 +158,10 @@ def update_provider(provider_id: str, body: ProviderUpdate, db: Session = Depend
 def delete_provider(provider_id: str, db: Session = Depends(get_db)) -> None:
     provider = db.get(Provider, provider_id)
     if provider is None:
-        raise HTTPException(404, "provider 不存在")
+        raise HTTPException(404, "渠道不存在")
     used = db.scalar(sa.select(sa.func.count()).select_from(Deployment).where(Deployment.provider_id == provider_id))
     if used:
-        raise HTTPException(409, "provider 仍被 Deployment 引用，不能删除")
+        raise HTTPException(409, "渠道仍被部署引用，不能删除")
     if provider.credential_ref:
         credentials.delete_api_key(provider.credential_ref)
     db.query(ProviderModelCatalog).filter(ProviderModelCatalog.provider_id == provider_id).delete()
@@ -176,7 +176,7 @@ def _fetch_provider_models(provider: Provider) -> list[str]:
 
     base = (provider.base_url or "").rstrip("/")
     if not base:
-        raise HTTPException(400, "该 provider 未配置 base_url，无法拉取模型列表")
+        raise HTTPException(400, "该渠道未配置接口地址，无法拉取模型列表")
 
     headers: dict[str, str] = {}
     api_key = credentials.get_api_key(provider.credential_ref) if provider.credential_ref else None
@@ -207,7 +207,7 @@ def list_provider_models(provider_id: str, refresh: bool = False, db: Session = 
     """
     provider = db.get(Provider, provider_id)
     if provider is None:
-        raise HTTPException(404, "provider 不存在")
+        raise HTTPException(404, "渠道不存在")
 
     catalog = db.scalar(
         sa.select(ProviderModelCatalog).where(ProviderModelCatalog.provider_id == provider_id)
@@ -265,9 +265,9 @@ def list_deployments(db: Session = Depends(get_db)) -> list[dict]:
 @router.post("/deployments", status_code=201)
 def create_deployment(body: DeploymentCreate, db: Session = Depends(get_db)) -> dict:
     if db.get(Model, body.model_id) is None:
-        raise HTTPException(404, "model 不存在")
+        raise HTTPException(404, "模型不存在")
     if db.get(Provider, body.provider_id) is None:
-        raise HTTPException(404, "provider 不存在")
+        raise HTTPException(404, "渠道不存在")
     deployment = Deployment(**body.model_dump())
     db.add(deployment)
     db.commit()
@@ -279,7 +279,7 @@ def create_deployment(body: DeploymentCreate, db: Session = Depends(get_db)) -> 
 def update_deployment(deployment_id: str, body: DeploymentUpdate, db: Session = Depends(get_db)) -> dict:
     deployment = db.get(Deployment, deployment_id)
     if deployment is None:
-        raise HTTPException(404, "deployment 不存在")
+        raise HTTPException(404, "部署不存在")
     for field_name, value in body.model_dump(exclude_unset=True).items():
         setattr(deployment, field_name, value)
     db.commit()
@@ -291,7 +291,7 @@ def update_deployment(deployment_id: str, body: DeploymentUpdate, db: Session = 
 def delete_deployment(deployment_id: str, db: Session = Depends(get_db)) -> None:
     deployment = db.get(Deployment, deployment_id)
     if deployment is None:
-        raise HTTPException(404, "deployment 不存在")
+        raise HTTPException(404, "部署不存在")
     # SQLite 默认不强制外键：显式检查，避免历史 Run 出现悬空引用
     used = db.scalar(
         sa.select(sa.func.count())
@@ -303,7 +303,7 @@ def delete_deployment(deployment_id: str, db: Session = Depends(get_db)) -> None
         .where(JudgeExecution.deployment_id == deployment_id)
     )
     if used:
-        raise HTTPException(409, "deployment 已被历史 Run 使用，为保持可追溯性不能删除")
+        raise HTTPException(409, "部署已被历史评测使用，为保持可追溯性不能删除")
     db.query(ReasoningProfile).filter(ReasoningProfile.deployment_id == deployment_id).delete()
     db.delete(deployment)
     db.commit()
@@ -325,7 +325,7 @@ def list_reasoning_profiles(deployment_id: str | None = None, db: Session = Depe
 @router.post("/reasoning-profiles", status_code=201)
 def create_reasoning_profile(body: ReasoningProfileCreate, db: Session = Depends(get_db)) -> dict:
     if db.get(Deployment, body.deployment_id) is None:
-        raise HTTPException(404, "deployment 不存在")
+        raise HTTPException(404, "部署不存在")
     profile = ReasoningProfile(**body.model_dump())
     db.add(profile)
     db.commit()
@@ -336,7 +336,7 @@ def create_reasoning_profile(body: ReasoningProfileCreate, db: Session = Depends
 def delete_reasoning_profile(profile_id: str, db: Session = Depends(get_db)) -> None:
     profile = db.get(ReasoningProfile, profile_id)
     if profile is None:
-        raise HTTPException(404, "reasoning profile 不存在")
+        raise HTTPException(404, "推理配置不存在")
     used = db.scalar(
         sa.select(sa.func.count())
         .select_from(SolverExecution)

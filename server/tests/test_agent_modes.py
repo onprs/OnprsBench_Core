@@ -675,4 +675,4 @@ def test_empty_suite_rejected(client: TestClient, tmp_path: Path) -> None:
         },
     )
     assert run.status_code == 422
-    assert "没有可运行的 task" in run.text
+    assert "没有可运行的任务" in run.text

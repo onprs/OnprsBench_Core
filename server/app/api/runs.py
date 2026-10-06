@@ -102,7 +102,7 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(404, "数据集安装不存在")
     suite = next((s for s in installation.suites if s["id"] == body.suite_id), None)
     if suite is None:
-        raise HTTPException(404, f"suite 不存在: {body.suite_id}")
+        raise HTTPException(404, f"套件不存在: {body.suite_id}")
     _validate_targets(db, body.solvers, "solver")
     _validate_targets(db, body.judges, "judge")
 
@@ -112,7 +112,7 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(422, str(exc)) from exc
     if not tasks:
         # metadata-only 坐标系（external suite）没有可运行内容
-        raise HTTPException(422, f"suite {body.suite_id} 没有可运行的 task")
+        raise HTTPException(422, f"套件 {body.suite_id} 没有可运行的任务")
 
     # 冻结 config snapshot：Run 可复现性的核心
     snapshot_payload = {
@@ -178,7 +178,7 @@ def compare_runs(ids: str, db: Session = Depends(get_db)) -> dict:
     """判定多个 Run 是否可直接比较。用法: /api/runs/compare?ids=id1,id2"""
     run_ids = [s.strip() for s in ids.split(",") if s.strip()]
     if len(run_ids) < 2:
-        raise HTTPException(400, "至少需要 2 个 run id")
+        raise HTTPException(400, "至少需要 2 个评测 id")
     return analytics.compare_runs(db, run_ids)
 
 
@@ -186,7 +186,7 @@ def compare_runs(ids: str, db: Session = Depends(get_db)) -> dict:
 def get_run(run_id: str, db: Session = Depends(get_db)) -> dict:
     run = db.get(Run, run_id)
     if run is None:
-        raise HTTPException(404, "run 不存在")
+        raise HTTPException(404, "评测不存在")
     return run_dict(run, db)
 
 
@@ -194,7 +194,7 @@ def get_run(run_id: str, db: Session = Depends(get_db)) -> dict:
 def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
     run = db.get(Run, run_id)
     if run is None:
-        raise HTTPException(404, "run 不存在")
+        raise HTTPException(404, "评测不存在")
     return analytics.run_results(db, run_id)
 
 
@@ -202,7 +202,7 @@ def get_run_results(run_id: str, db: Session = Depends(get_db)) -> dict:
 def get_run_config_snapshot(run_id: str, db: Session = Depends(get_db)) -> dict:
     run = db.get(Run, run_id)
     if run is None:
-        raise HTTPException(404, "run 不存在")
+        raise HTTPException(404, "评测不存在")
     snapshot = db.get(ConfigSnapshot, run.config_snapshot_id)
     return {"run_id": run_id, "payload": snapshot.payload, "created_at": snapshot.created_at}
 
@@ -210,7 +210,7 @@ def get_run_config_snapshot(run_id: str, db: Session = Depends(get_db)) -> dict:
 @router.get("/{run_id}/usage")
 def get_run_usage(run_id: str, db: Session = Depends(get_db)) -> list[dict]:
     if db.get(Run, run_id) is None:
-        raise HTTPException(404, "run 不存在")
+        raise HTTPException(404, "评测不存在")
     records = db.scalars(sa.select(UsageRecord).where(UsageRecord.run_id == run_id)).all()
     snapshots = {
         s.id: s
@@ -251,7 +251,7 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> dict:
     """取消正在运行/等待中的 Run。已完成的执行记录保留，进行中的置为 cancelled。"""
     run = db.get(Run, run_id)
     if run is None:
-        raise HTTPException(404, "run 不存在")
+        raise HTTPException(404, "评测不存在")
     if run.status not in ("pending", "running"):
         raise HTTPException(409, f"run 已处于终态: {run.status}")
     if not run_manager.cancel(run_id):
@@ -270,9 +270,9 @@ def rejudge(run_id: str, body: RejudgeRequest, db: Session = Depends(get_db)) ->
     """对历史 Solver 回答重新评分。只新增 JudgeExecution，原始记录不变。"""
     run = db.get(Run, run_id)
     if run is None:
-        raise HTTPException(404, "run 不存在")
+        raise HTTPException(404, "评测不存在")
     if run_manager.is_active(run_id):
-        raise HTTPException(409, "该 run 当前有正在执行的任务")
+        raise HTTPException(409, "该评测当前有正在执行的任务")
 
     if body.solver_execution_ids:
         solver_execution_ids = body.solver_execution_ids
@@ -286,7 +286,7 @@ def rejudge(run_id: str, body: RejudgeRequest, db: Session = Depends(get_db)) ->
             )
         )
         if count != len(solver_execution_ids):
-            raise HTTPException(400, "存在不属于该 run 或未完成的 solver_execution_id")
+            raise HTTPException(400, "存在不属于该评测或未完成的 solver_execution_id")
     else:
         solver_execution_ids = [
             row.id
@@ -297,7 +297,7 @@ def rejudge(run_id: str, body: RejudgeRequest, db: Session = Depends(get_db)) ->
             )
         ]
     if not solver_execution_ids:
-        raise HTTPException(400, "没有可重新评分的 solver execution")
+        raise HTTPException(400, "没有可重新评分的解答执行")
 
     if body.judges:
         _validate_targets(db, body.judges, "judge")

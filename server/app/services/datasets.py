@@ -543,7 +543,7 @@ def get_suite_tasks(session: Session, installation: DatasetInstallation, suite_i
     """按 suite 取 task 缓存记录，保持 suite 中声明的顺序。"""
     suite = next((s for s in installation.suites if s["id"] == suite_id), None)
     if suite is None:
-        raise DatasetValidationError([f"suite 不存在: {suite_id}"])
+        raise DatasetValidationError([f"套件不存在: {suite_id}"])
     rows = session.scalars(
         sa.select(TaskCache).where(TaskCache.installation_id == installation.id)
     ).all()

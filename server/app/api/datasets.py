@@ -85,7 +85,7 @@ def delete_installation(installation_id: str, db: Session = Depends(get_db)) -> 
         sa.select(sa.func.count()).select_from(Run).where(Run.installation_id == installation_id)
     )
     if used:
-        raise HTTPException(409, "该数据集已被历史 Run 使用，为保持可追溯性不能卸载")
+        raise HTTPException(409, "该数据集已被历史评测使用，为保持可追溯性不能卸载")
     db.query(TaskCache).filter(TaskCache.installation_id == installation_id).delete()
     db.delete(installation)
     db.commit()
@@ -109,7 +109,7 @@ def list_tasks(installation_id: str, suite_id: str | None = None, db: Session = 
     if suite_id:
         suite = next((s for s in installation.suites if s["id"] == suite_id), None)
         if suite is None:
-            raise HTTPException(404, f"suite 不存在: {suite_id}")
+            raise HTTPException(404, f"套件不存在: {suite_id}")
         order = {tid: idx for idx, tid in enumerate(suite["task_ids"])}
         rows = sorted((r for r in rows if r.task_id in order), key=lambda r: order[r.task_id])
     return [

@@ -241,7 +241,7 @@ def compare_runs(session: Session, run_ids: list[str]) -> dict:
     runs = [session.get(Run, rid) for rid in run_ids]
     if any(r is None for r in runs):
         missing = [rid for rid, r in zip(run_ids, runs) if r is None]
-        return {"comparable": False, "reasons": [f"run 不存在: {rid}" for rid in missing]}
+        return {"comparable": False, "reasons": [f"评测不存在: {rid}" for rid in missing]}
 
     reasons: list[str] = []
 

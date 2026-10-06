@@ -15,7 +15,7 @@ PROVIDER_TYPE_DEFAULTS: dict[str, dict] = {
     "gemini": {"label": "Google Gemini", "base_url": None, "needs_key": True},
     "openrouter": {"label": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "needs_key": True},
     "deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com", "needs_key": True},
-    "openai_compatible": {"label": "OpenAI Compatible", "base_url": None, "needs_key": False},
+    "openai_compatible": {"label": "OpenAI 兼容", "base_url": None, "needs_key": False},
     "ollama": {"label": "Ollama", "base_url": "http://localhost:11434", "needs_key": False},
     "mock": {"label": "Mock（离线演示/测试）", "base_url": None, "needs_key": False},
 }
