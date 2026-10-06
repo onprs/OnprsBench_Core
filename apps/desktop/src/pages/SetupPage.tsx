@@ -256,12 +256,12 @@ function ProvidersTab({
 
   return (
     <div className="flex items-start gap-4">
-      <div className="min-w-0 flex-1 space-y-4">
+      <div className="grid min-w-0 flex-1 items-start gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle>添加渠道</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <CardContent className="space-y-3">
           <div className="space-y-1">
             <Label>名称</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：OpenAI 官方" />
@@ -297,12 +297,10 @@ function ProvidersTab({
               <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
           )}
-          <div className="sm:col-span-2 xl:col-span-3">
-            <ErrorText error={error} />
-            <Button onClick={createProvider} disabled={!name}>
-              创建
-            </Button>
-          </div>
+          <ErrorText error={error} />
+          <Button onClick={createProvider} disabled={!name}>
+            创建
+          </Button>
         </CardContent>
       </Card>
 
@@ -316,9 +314,9 @@ function ProvidersTab({
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
-                <TableHead className="w-[120px]">类型</TableHead>
-                <TableHead className="w-[96px]">凭据</TableHead>
-                <TableHead className="w-[248px]"></TableHead>
+                <TableHead className="w-[104px]">类型</TableHead>
+                <TableHead className="w-[76px]">凭据</TableHead>
+                <TableHead className="w-[216px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -329,7 +327,7 @@ function ProvidersTab({
                   title="查看已拉取的模型列表"
                   onClick={() => void showCachedModels(p)}
                 >
-                  <TableCell className="whitespace-nowrap font-medium">{p.name}</TableCell>
+                  <TableCell className="break-words font-medium">{p.name}</TableCell>
                   <TableCell className="whitespace-nowrap text-muted-foreground">{providerTypes.find((t) => t.type === p.type)?.label ?? p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
                   {/* 操作列阻止冒泡，避免点按钮时同时打开模型面板 */}
