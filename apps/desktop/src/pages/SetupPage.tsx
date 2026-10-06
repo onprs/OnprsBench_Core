@@ -97,14 +97,13 @@ function ProvidersTab({
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  // 拉取模型面板：页内右侧滑出，models 为 null 表示加载中
+  // 模型面板：点击 Provider 展示已拉取列表；拉取按钮负责拉取/再次拉取
   const [modelsPanel, setModelsPanel] = useState<{
     provider: Provider;
     models: string[] | null;
     error: string | null;
-    fromCache: boolean;
     fetchedAt: string | null;
-    refreshing: boolean;
+    source: "loading" | "cached" | "fresh" | "empty";
   } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [editing, setEditing] = useState<Provider | null>(null);
@@ -130,63 +129,71 @@ function ProvidersTab({
     }
   }
 
-  async function fetchModels(provider: Provider) {
+  /** 点击 Provider 名称或模型列表：展示已拉取的列表（不发起拉取）。 */
+  async function showCachedModels(provider: Provider) {
+    setPanelOpen(true);
+    if (provider.model_catalog_count === 0) {
+      setModelsPanel({ provider, models: [], error: null, fetchedAt: null, source: "empty" });
+      return;
+    }
     setModelsPanel({
       provider,
       models: null,
       error: null,
-      fromCache: false,
       fetchedAt: provider.model_catalog_fetched_at,
-      refreshing: false,
+      source: "loading",
     });
-    setPanelOpen(true);
     try {
-      // 首次访问会直接拉取；已有缓存时立即返回旧列表，随后后台刷新
-      const data = await api.get<{ models: string[]; fetched_at: string | null; from_cache: boolean }>(
+      const data = await api.get<{ models: string[]; fetched_at: string | null }>(
         `/api/providers/${provider.id}/models`
       );
       setModelsPanel({
         provider,
         models: data.models,
         error: null,
-        fromCache: data.from_cache,
         fetchedAt: data.fetched_at,
-        refreshing: data.from_cache,
+        source: "cached",
       });
-      await onChanged();
-      if (!data.from_cache) return;
-
-      try {
-        const fresh = await api.get<{ models: string[]; fetched_at: string | null; from_cache: boolean }>(
-          `/api/providers/${provider.id}/models?refresh=true`
-        );
-        setModelsPanel({
-          provider,
-          models: fresh.models,
-          error: null,
-          fromCache: false,
-          fetchedAt: fresh.fetched_at,
-          refreshing: false,
-        });
-        await onChanged();
-      } catch (e) {
-        setModelsPanel({
-          provider,
-          models: data.models,
-          error: `刷新失败，以下为上次拉取结果：${e instanceof Error ? e.message : String(e)}`,
-          fromCache: true,
-          fetchedAt: data.fetched_at,
-          refreshing: false,
-        });
-      }
     } catch (e) {
       setModelsPanel({
         provider,
         models: null,
         error: e instanceof Error ? e.message : String(e),
-        fromCache: false,
         fetchedAt: provider.model_catalog_fetched_at,
-        refreshing: false,
+        source: "cached",
+      });
+    }
+  }
+
+  /** 拉取按钮：拉取 / 再次拉取（强制刷新并更新缓存）。 */
+  async function fetchModels(provider: Provider) {
+    setPanelOpen(true);
+    setModelsPanel({
+      provider,
+      models: null,
+      error: null,
+      fetchedAt: provider.model_catalog_fetched_at,
+      source: "loading",
+    });
+    try {
+      const data = await api.get<{ models: string[]; fetched_at: string | null }>(
+        `/api/providers/${provider.id}/models?refresh=true`
+      );
+      setModelsPanel({
+        provider,
+        models: data.models,
+        error: null,
+        fetchedAt: data.fetched_at,
+        source: "fresh",
+      });
+      await onChanged();
+    } catch (e) {
+      setModelsPanel({
+        provider,
+        models: null,
+        error: e instanceof Error ? e.message : String(e),
+        fetchedAt: provider.model_catalog_fetched_at,
+        source: "fresh",
       });
     }
   }
@@ -287,23 +294,41 @@ function ProvidersTab({
             <TableBody>
               {providers.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell className="whitespace-nowrap">{p.name}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <button
+                      type="button"
+                      className="underline-offset-2 hover:underline"
+                      title="查看已拉取的模型列表"
+                      onClick={() => void showCachedModels(p)}
+                    >
+                      {p.name}
+                    </button>
+                  </TableCell>
                   <TableCell>{p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                    {p.model_catalog_count > 0
-                      ? `${p.model_catalog_count} 个 · ${fmtTime(p.model_catalog_fetched_at)}`
-                      : "未拉取"}
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {p.model_catalog_count > 0 ? (
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        title="查看已拉取的模型列表"
+                        onClick={() => void showCachedModels(p)}
+                      >
+                        {p.model_catalog_count} 个 · {fmtTime(p.model_catalog_fetched_at)}
+                      </button>
+                    ) : (
+                      <span className="text-muted-foreground">未拉取</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => fetchModels(p)}
-                        disabled={panelOpen && modelsPanel?.provider.id === p.id && (modelsPanel.models === null || modelsPanel.refreshing)}
+                        onClick={() => void fetchModels(p)}
+                        disabled={panelOpen && modelsPanel?.provider.id === p.id && modelsPanel.source === "loading"}
                       >
-                        {panelOpen && modelsPanel?.provider.id === p.id && (modelsPanel.models === null || modelsPanel.refreshing) ? (
+                        {panelOpen && modelsPanel?.provider.id === p.id && modelsPanel.source === "loading" ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : null}
                         {p.model_catalog_count > 0 ? "再次拉取" : "拉取模型"}
@@ -345,45 +370,47 @@ function ProvidersTab({
               </Button>
             </CardHeader>
             <CardContent>
-              {modelsPanel && (
-                <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>
-                    {modelsPanel.fetchedAt ? `上次拉取：${fmtTime(modelsPanel.fetchedAt)}` : "尚未拉取"}
-                    {modelsPanel.fromCache ? " · 上次结果" : " · 刚刚更新"}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => fetchModels(modelsPanel.provider)}
-                    disabled={modelsPanel.refreshing}
-                  >
-                    {modelsPanel.refreshing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                    再次拉取
-                  </Button>
-                </div>
+              {modelsPanel && modelsPanel.source !== "loading" && !modelsPanel.error && (
+                <p className="mb-2 text-xs text-muted-foreground">
+                  {modelsPanel.source === "cached" &&
+                    `已拉取列表${modelsPanel.fetchedAt ? ` · ${fmtTime(modelsPanel.fetchedAt)}` : ""}`}
+                  {modelsPanel.source === "fresh" &&
+                    `刚刚拉取${modelsPanel.fetchedAt ? ` · ${fmtTime(modelsPanel.fetchedAt)}` : ""}`}
+                  {modelsPanel.source === "empty" && "尚未拉取模型"}
+                </p>
               )}
-              {modelsPanel && modelsPanel.models === null && !modelsPanel.error && (
+              {modelsPanel?.source === "loading" && (
                 <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
                   <Loader2 className="h-6 w-6 animate-spin" />
                   <span className="text-sm">正在拉取模型列表…</span>
                 </div>
               )}
-              {modelsPanel?.error && modelsPanel.models === null && (
+              {modelsPanel?.error && (
                 <div className="flex h-40 flex-col items-center justify-center gap-3">
                   <p className="text-sm text-destructive">{modelsPanel.error}</p>
-                  <Button size="sm" variant="outline" onClick={() => fetchModels(modelsPanel.provider)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      modelsPanel.source === "fresh"
+                        ? void fetchModels(modelsPanel.provider)
+                        : void showCachedModels(modelsPanel.provider)
+                    }
+                  >
                     重试
                   </Button>
                 </div>
               )}
-              {modelsPanel?.error && modelsPanel.models !== null && (
-                <p className="mb-2 text-xs text-destructive">{modelsPanel.error}</p>
+              {modelsPanel?.source === "empty" && !modelsPanel.error && (
+                <p className="text-sm text-muted-foreground">
+                  尚未拉取模型。点击右侧「拉取模型」获取该 Provider 的可用模型列表。
+                </p>
               )}
-              {modelsPanel?.models && (
+              {modelsPanel?.models && modelsPanel.models.length === 0 && modelsPanel.source !== "empty" && (
+                <p className="text-sm text-muted-foreground">该 Provider 未返回任何模型</p>
+              )}
+              {modelsPanel?.models && modelsPanel.models.length > 0 && (
                 <div className="max-h-[60vh] space-y-1 overflow-auto">
-                  {modelsPanel.models.length === 0 && (
-                    <p className="text-sm text-muted-foreground">该 Provider 未返回任何模型</p>
-                  )}
                   {modelsPanel.models.map((m) => {
                     const added = deployments.some(
                       (d) => d.provider_id === modelsPanel.provider.id && d.api_model_name === m
