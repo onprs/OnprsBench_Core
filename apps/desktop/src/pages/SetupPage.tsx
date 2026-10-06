@@ -341,15 +341,21 @@ function ProvidersTab({
         )}
       >
         <div className="w-[360px]">
-          <Card>
-            <CardHeader className="flex-row items-start justify-between space-y-0">
+          <Card className="relative">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="absolute right-1.5 top-1.5 h-7 w-7"
+              title="关闭"
+              onClick={() => setPanelOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+            <CardHeader className="space-y-0 pr-10">
               <CardTitle className="flex items-center gap-1.5 text-base">
                 {modelsPanel?.provider.name} 的可用模型
                 <HelpTip text="选择一个模型创建 Deployment（同时自动建立 canonical Model）" />
               </CardTitle>
-              <Button size="icon" variant="ghost" onClick={() => setPanelOpen(false)}>
-                <X className="h-4 w-4" />
-              </Button>
             </CardHeader>
             <CardContent>
               {modelsPanel && modelsPanel.source !== "loading" && !modelsPanel.error && (
