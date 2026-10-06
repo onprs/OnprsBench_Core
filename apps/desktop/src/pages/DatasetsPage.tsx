@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileArchive, FolderOpen } from "lucide-react";
 import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
@@ -20,6 +20,8 @@ export function DatasetsPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+  const sourceMenuRef = useRef<HTMLDivElement>(null);
   const { confirm, confirmElement } = useConfirm();
 
   const reload = useCallback(async () => {
@@ -35,6 +37,7 @@ export function DatasetsPage() {
     if (!directory) return;
     setError(null);
     setInfo(null);
+    setSourceMenuOpen(false);
     try {
       const result = await api.post<{ created: boolean; installation: DatasetInstallation }>(
         "/api/datasets/installations",
@@ -72,6 +75,28 @@ export function DatasetsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, reload]);
 
+  /** 点击拖入区域后选择来源：目录或压缩包。 */
+  async function pickSource(kind: "directory" | "archive") {
+    setSourceMenuOpen(false);
+    const selected = kind === "directory" ? await pickDirectory() : await pickArchiveFile();
+    if (selected) {
+      setPath(selected);
+      await install(selected);
+    }
+  }
+
+  // 点击页面其他位置关闭来源菜单
+  useEffect(() => {
+    if (!sourceMenuOpen) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (sourceMenuRef.current && !sourceMenuRef.current.contains(event.target as Node)) {
+        setSourceMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [sourceMenuOpen]);
+
   async function showTasks(installationId: string) {
     setSelected(installationId);
     setTasks(await api.get<DatasetTask[]>(`/api/datasets/installations/${installationId}/tasks`));
@@ -108,67 +133,64 @@ export function DatasetsPage() {
               数据集目录或发布包
               <HelpTip text="支持解压后的目录，或 .tar.gz / .tgz / .tar 发布包；需包含符合 Dataset Protocol 的 manifest.yaml，安装前会做完整校验" />
             </Label>
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragging(false);
-                if (isDesktopApp()) return; // 桌面壳通过原生拖入事件处理
-                setError("浏览器模式无法读取拖入目录的路径，请在桌面应用中使用拖入或「选择目录 / 选择压缩包」");
-              }}
-              className={cn(
-                "flex flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-center transition-colors",
-                dragging && "border-primary bg-accent/40"
+            <div className="relative" ref={sourceMenuRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isDesktopApp()) {
+                    setError("桌面应用支持点击这里选择数据集；浏览器模式请填写路径");
+                    return;
+                  }
+                  setSourceMenuOpen((open) => !open);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  if (isDesktopApp()) return; // 桌面壳通过原生拖入事件处理
+                  setError("浏览器模式无法读取拖入目录的路径，请在桌面应用中使用拖入或点击选择");
+                }}
+                className={cn(
+                  "flex w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-center transition-colors",
+                  dragging && "border-primary bg-accent/40",
+                  isDesktopApp() && "cursor-pointer hover:border-primary/60 hover:bg-accent/20"
+                )}
+              >
+                <FolderOpen className="h-5 w-5 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">
+                  {isDesktopApp()
+                    ? "将数据集目录或压缩包拖到这里，或点击这里选择（选好即自动安装）"
+                    : "桌面应用支持将数据集目录或压缩包拖到这里或点击选择；浏览器模式请填写路径"}
+                </span>
+                {path && <span className="break-all font-mono text-xs">{path}</span>}
+              </button>
+              {sourceMenuOpen && (
+                <div className="absolute left-1/2 top-full z-50 mt-1 w-44 -translate-x-1/2 rounded-md border bg-popover p-1 shadow-md">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+                    onClick={() => void pickSource("directory")}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                    选择目录
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+                    onClick={() => void pickSource("archive")}
+                  >
+                    <FileArchive className="h-4 w-4" />
+                    选择压缩包
+                  </button>
+                </div>
               )}
-            >
-              <FolderOpen className="h-5 w-5 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                {isDesktopApp()
-                  ? "将数据集目录或压缩包拖到这里，或点击「选择目录 / 选择压缩包」（拖入后自动安装）"
-                  : "桌面应用支持将数据集目录或 .tar.gz 压缩包拖到这里或选择文件；浏览器模式请填写路径"}
-              </p>
-              {path && <p className="break-all font-mono text-xs">{path}</p>}
             </div>
             <div className="flex flex-wrap gap-2">
               <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="数据集目录或 .tar.gz 压缩包路径" className="font-mono" />
-              {isDesktopApp() && (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      void (async () => {
-                        const selected = await pickDirectory();
-                        if (selected) {
-                          setPath(selected);
-                          await install(selected);
-                        }
-                      })();
-                    }}
-                  >
-                    <FolderOpen className="mr-1 h-4 w-4" />
-                    选择目录
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      void (async () => {
-                        const selected = await pickArchiveFile();
-                        if (selected) {
-                          setPath(selected);
-                          await install(selected);
-                        }
-                      })();
-                    }}
-                  >
-                    <FileArchive className="mr-1 h-4 w-4" />
-                    选择压缩包
-                  </Button>
-                </>
-              )}
               <Button onClick={() => void install()} disabled={!path}>
                 校验并安装
               </Button>
