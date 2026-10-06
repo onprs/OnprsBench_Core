@@ -3,5 +3,13 @@
   "identifier": "default",
   "description": "默认权限：核心 API 与目录选择对话框",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "dialog:allow-open"
+  ]
 }
