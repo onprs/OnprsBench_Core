@@ -162,6 +162,8 @@ samples: judge_assets/samples.json          # 官方样例 [{input, output}]
 
 提取失败时判定事实记录 `patch_applied=false` / `compiled=false`，judge 按 anchors 对相应维度打 0 档。
 
+框架对 `issue_resolution` 任务以工作区多轮形态执行 solver（agent 在安装时预取的仓库副本中定位与修复，改动由框架自动生成为 unified diff 拼入回答）；无论单轮还是工作区形态，判定输入始终是回答中的补丁围栏。
+
 ## 10. 框架环境义务（框架实现约定）
 
 程序判定所需环境由框架自动供给，不要求用户预装：
