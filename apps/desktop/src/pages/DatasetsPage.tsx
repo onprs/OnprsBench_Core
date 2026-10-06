@@ -20,6 +20,7 @@ export function DatasetsPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [tasks, setTasks] = useState<DatasetTask[]>([]);
   const [problemTask, setProblemTask] = useState<DatasetTask | null>(null);
+  const installedListRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -107,6 +108,17 @@ export function DatasetsPage() {
     setTasks(await api.get<DatasetTask[]>(`/api/datasets/installations/${installationId}/tasks`));
   }
 
+  // 查看题目后，把选中的数据集中到已安装列表可视区第一位
+  useEffect(() => {
+    if (!selected) return;
+    const container = installedListRef.current;
+    if (!container) return;
+    const row = container.querySelector<HTMLElement>(`[data-installation-id="${selected}"]`);
+    if (!row) return;
+    const offset = row.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    container.scrollTo({ top: container.scrollTop + offset, behavior: "smooth" });
+  }, [selected, tasks]);
+
   async function uninstall(inst: DatasetInstallation) {
     const ok = await confirm({
       title: "卸载数据集？",
@@ -125,10 +137,83 @@ export function DatasetsPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-bold">数据集</h1>
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <h1 className="shrink-0 text-xl font-bold">数据集</h1>
 
-      <Card>
+      {/* 题目列表：点击查看后展开，位于安装板块上方，展开时把下方板块推下去 */}
+      <div
+        className={cn(
+          "shrink-0 overflow-hidden transition-all duration-300 ease-out",
+          selected ? "max-h-[380px] opacity-100" : "max-h-0 opacity-0"
+        )}
+      >
+        {selected && (
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <CardTitle>题目列表（{tasks.length}）</CardTitle>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(null)}>
+                收起
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {tasks.length === 0 ? (
+                <p className="text-sm text-muted-foreground">该数据集没有任务</p>
+              ) : (
+                <div className="h-[200px] overflow-auto rounded border">
+                  <Table>
+                    <TableHeader className="sticky top-0 z-10 bg-card">
+                      <TableRow>
+                        <TableHead>ID</TableHead>
+                        <TableHead className="w-[56px]">rev</TableHead>
+                        <TableHead className="w-[140px]">类型</TableHead>
+                        <TableHead className="w-[200px]">标签</TableHead>
+                        <TableHead className="w-[90px]">难度</TableHead>
+                        <TableHead className="w-[100px]">污染风险</TableHead>
+                        <TableHead className="w-[100px]">程序判定</TableHead>
+                        <TableHead>题面</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {tasks.map((t) => (
+                        <TableRow key={t.id} className="h-10">
+                          <TableCell className="whitespace-nowrap font-mono text-xs">{t.task_id}</TableCell>
+                          <TableCell>{t.revision}</TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">{labelForTaskType(t.type)}</TableCell>
+                          <TableCell>
+                            <CompactList items={t.tags ?? []} />
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">{labelForDifficulty(t.difficulty)}</TableCell>
+                          <TableCell>
+                            <Badge variant={t.contamination === "high" ? "destructive" : "outline"}>
+                              {labelForContamination(t.contamination)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={t.has_verify_contract ? "success" : "outline"}>
+                              {t.has_verify_contract ? "有契约" : "文本评审"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="max-w-md">
+                            <button
+                              type="button"
+                              className="block max-w-full truncate text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                              onClick={() => setProblemTask(t)}
+                            >
+                              {t.problem.split("\n").find((line) => line.trim()) ?? "（空题面）"}
+                            </button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      <Card className="shrink-0">
         <CardHeader>
           <CardTitle>安装本地数据集</CardTitle>
         </CardHeader>
@@ -161,7 +246,7 @@ export function DatasetsPage() {
                   setError("浏览器模式无法读取拖入目录的路径，请在桌面应用中使用拖入或点击选择");
                 }}
                 className={cn(
-                  "flex w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-6 text-center transition-colors",
+                  "flex w-full flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-4 text-center transition-colors",
                   dragging && "border-primary bg-accent/40",
                   isDesktopApp() && "cursor-pointer hover:border-primary/60 hover:bg-accent/20"
                 )}
@@ -205,13 +290,14 @@ export function DatasetsPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
+      <Card className="flex min-h-[176px] flex-1 flex-col">
+        <CardHeader className="shrink-0">
           <CardTitle>已安装</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="min-h-0 flex-1">
+          <div ref={installedListRef} className="h-full overflow-auto rounded border">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10 bg-card">
               <TableRow>
                 <TableHead>数据集</TableHead>
                 <TableHead>版本</TableHead>
@@ -225,7 +311,7 @@ export function DatasetsPage() {
             </TableHeader>
             <TableBody>
               {installations.map((inst) => (
-                <TableRow key={inst.id}>
+                <TableRow key={inst.id} data-installation-id={inst.id}>
                   <TableCell>
                     <div className="font-medium">{inst.dataset_name}</div>
                     <div className="font-mono text-xs text-muted-foreground">{inst.dataset_id}</div>
@@ -258,71 +344,9 @@ export function DatasetsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
-
-      {selected && (
-        <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <CardTitle>题目列表</CardTitle>
-            <Button size="sm" variant="ghost" onClick={() => setSelected(null)}>
-              收起
-            </Button>
-          </CardHeader>
-          <CardContent>
-            {tasks.length === 0 ? (
-              <p className="text-sm text-muted-foreground">该数据集没有任务</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead className="w-[56px]">rev</TableHead>
-                    <TableHead className="w-[140px]">类型</TableHead>
-                    <TableHead className="w-[200px]">标签</TableHead>
-                    <TableHead className="w-[90px]">难度</TableHead>
-                    <TableHead className="w-[100px]">污染风险</TableHead>
-                    <TableHead className="w-[100px]">程序判定</TableHead>
-                    <TableHead>题面</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tasks.map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell className="whitespace-nowrap font-mono text-xs">{t.task_id}</TableCell>
-                      <TableCell>{t.revision}</TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">{labelForTaskType(t.type)}</TableCell>
-                      <TableCell>
-                        <CompactList items={t.tags ?? []} />
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">{labelForDifficulty(t.difficulty)}</TableCell>
-                      <TableCell>
-                        <Badge variant={t.contamination === "high" ? "destructive" : "outline"}>
-                          {labelForContamination(t.contamination)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={t.has_verify_contract ? "success" : "outline"}>
-                          {t.has_verify_contract ? "有契约" : "文本评审"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="max-w-md">
-                        <button
-                          type="button"
-                          className="block max-w-full truncate text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                          onClick={() => setProblemTask(t)}
-                        >
-                          {t.problem.split("\n").find((line) => line.trim()) ?? "（空题面）"}
-                        </button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       <Dialog open={problemTask !== null} onOpenChange={(open) => !open && setProblemTask(null)}>
         <DialogContent className="max-w-3xl">
