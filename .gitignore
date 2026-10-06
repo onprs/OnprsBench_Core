@@ -55,3 +55,11 @@ logs/
 Thumbs.db
 .smoke_data/
 .realtest/
+
+# ===== 本地开发入口（不纳入追踪）=====
+dev.cmd
+dev.ps1
+dev.py
+dev_tasks.py
+dev.local.env
+.devcheck/
