@@ -27,9 +27,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     import asyncio
 
     from .db import run_migrations
-    from .services.runner import run_manager
+    from .services.runner import recover_interrupted_runs, run_manager
 
     run_migrations()
+    # 上次进程崩溃/被终止时遗留的 running 状态在此恢复，避免 Run 永久卡死
+    recover_interrupted_runs()
     run_manager.bind_loop(asyncio.get_running_loop())
     yield
 

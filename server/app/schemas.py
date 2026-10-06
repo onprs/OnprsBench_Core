@@ -56,6 +56,8 @@ class ReasoningProfileCreate(BaseModel):
     top_p: float | None = None
     seed: int | None = None
     provider_params: dict = Field(default_factory=dict)
+    # Agent 最大工具循环轮次：None = 框架默认；0 = 不限制；>0 = 上限
+    agent_max_turns: int | None = None
 
 
 class DatasetInstall(BaseModel):

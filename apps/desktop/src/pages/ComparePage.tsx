@@ -17,6 +17,7 @@ interface CompareRow {
   score: number | null;
   cost: number | null;
   latency: number | null;
+  turns: number | null;
 }
 
 /** Pareto 前沿（最大化 score，最小化 cost） */
@@ -70,6 +71,7 @@ export function ComparePage() {
             score: t.score_mean,
             cost: t.total_cost,
             latency: t.latency_mean_s,
+            turns: t.turns_mean,
           });
         }
       });
@@ -208,6 +210,7 @@ export function ComparePage() {
                     <TableHead>平均分</TableHead>
                     <TableHead>Solver 成本</TableHead>
                     <TableHead>平均延迟</TableHead>
+                    <TableHead>花费轮次</TableHead>
                     <TableHead>时间</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -219,6 +222,7 @@ export function ComparePage() {
                       <TableCell className="font-semibold">{fmtScore(r.score)}</TableCell>
                       <TableCell>{fmtCost(r.cost)}</TableCell>
                       <TableCell>{fmtSeconds(r.latency)}</TableCell>
+                      <TableCell>{r.turns !== null ? r.turns.toFixed(1) : "—"}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{fmtTime(r.runAt)}</TableCell>
                     </TableRow>
                   ))}

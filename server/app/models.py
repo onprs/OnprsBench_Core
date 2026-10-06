@@ -115,6 +115,8 @@ class ReasoningProfile(Base):
     top_p: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     seed: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     provider_params: Mapped[dict] = mapped_column(sa.JSON, default=dict)
+    # Agent 形态 Solver 的最大工具循环轮次：NULL = 框架默认；0 = 不限制；>0 = 上限
+    agent_max_turns: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
     deployment: Mapped[Deployment] = relationship(back_populates="reasoning_profiles")
 
@@ -141,6 +143,10 @@ class DatasetInstallation(Base):
     protocol_version: Mapped[str] = mapped_column(sa.String(16))
     manifest_hash: Mapped[str] = mapped_column(sa.String(64), unique=True)
     source_path: Mapped[str] = mapped_column(sa.String(2048))
+    # 分发形态：standard（判定资源按需下载）/ full（附带资源，可离线判定）
+    distribution: Mapped[str] = mapped_column(
+        sa.String(16), default="standard", server_default="standard"
+    )
     suites: Mapped[list] = mapped_column(sa.JSON)  # [{id, name, description, layer, adapter, task_ids}]
     capabilities: Mapped[list] = mapped_column(sa.JSON, default=list)
     installed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
@@ -260,6 +266,12 @@ class SolverExecution(Base):
     ttft_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     generation_time_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     total_latency_s: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    # 实际花费的模型调用轮次（oneshot = 1，agent = 工具循环轮次）
+    turns: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    # 最后一次模型调用的结束原因（stop / length / tool_calls / …）
+    finish_reason: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    # 是否发生过输出预算耗尽（任一调用 finish_reason == length）
+    truncated: Mapped[bool] = mapped_column(sa.Boolean, default=False, nullable=False, server_default=sa.false())
 
     prompt_json: Mapped[list | None] = mapped_column(sa.JSON, nullable=True)  # 发给 solver 的 messages
     response_text: Mapped[str | None] = mapped_column(sa.Text, nullable=True)

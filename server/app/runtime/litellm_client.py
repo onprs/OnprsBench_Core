@@ -20,7 +20,7 @@ from typing import Any
 
 import litellm
 
-from .base import CallTimer, ModelRequest, ModelResult, ToolCall, ToolStep, UsageInfo
+from .base import ModelRequest, ModelResult, ToolCall, ToolStep, UsageInfo
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,16 @@ logger = logging.getLogger(__name__)
 # 这里只做 None 过滤，具体兼容性交给 LiteLLM 与各 provider。
 _OPTIONAL_PARAMS = ("temperature", "top_p", "seed")
 
-# 网关瞬时错误（5xx、连接错误、流中断）的重试策略
-_MAX_RETRIES = 3
-_RETRY_BACKOFF_S = (5.0, 15.0, 30.0)
+# 网关瞬时错误（5xx、连接错误、流中断）的重试策略：最多 3 次尝试（首次 + 2 次重试）
+_MAX_ATTEMPTS = 3
+_RETRY_BACKOFF_S = (5.0, 15.0)
+
+# 思考预算到 provider 参数的映射。只映射 LiteLLM 有明确定义的 provider；
+# 无映射的 provider 不做臆测参数，未生效的字段由调用方记录进原始事实。
+_BUDGET_PARAM_BUILDERS = {
+    "anthropic": lambda n: {"thinking": {"type": "enabled", "budget_tokens": n}},
+    "gemini": lambda n: {"thinking": {"type": "enabled", "budget_tokens": n}},
+}
 
 
 def _utcnow() -> datetime:
@@ -160,23 +167,40 @@ def _extract_usage_from(usage: Any) -> UsageInfo:
 class _StreamAggregate:
     """一次流式调用的聚合结果。"""
 
+    attempts: int = 1  # 实际发起次数（重试后由调用方写入）
+
     def __init__(self, **kw: Any) -> None:
         self.__dict__.update(kw)
 
 
-async def _stream_with_retry(kwargs: dict[str, Any]) -> _StreamAggregate:
-    """对瞬时性 API 错误做有限重试（指数退避）；客户端错误（4xx）不重试。"""
+async def _stream_with_retry(
+    kwargs: dict[str, Any], *, call_timeout_s: float | None = None
+) -> "_StreamAggregate":
+    """对瞬时性 API 错误做有限重试（指数退避）；客户端错误（4xx）不重试。
+
+    墙钟上限（call_timeout_s）用于终止长时间无进展的请求（如模型持续思考）：
+    它是确定性策略，超时后不重试，直接抛出。
+    """
     last_exc: Exception | None = None
-    for attempt, backoff in enumerate(_RETRY_BACKOFF_S[:_MAX_RETRIES]):
+    for attempt in range(_MAX_ATTEMPTS):
+        backoff = _RETRY_BACKOFF_S[attempt] if attempt < len(_RETRY_BACKOFF_S) else None
         try:
-            return await _stream_completion(kwargs)
+            call = _stream_completion(kwargs)
+            if call_timeout_s and call_timeout_s > 0:
+                agg = await asyncio.wait_for(call, timeout=call_timeout_s)
+            else:
+                agg = await call
+            agg.attempts = attempt + 1
+            return agg
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"模型调用超过墙钟上限 {call_timeout_s:.0f}s") from exc
         except Exception as exc:
             last_exc = exc
             status = getattr(exc, "status_code", None)
             # 4xx 为确定性错误（鉴权/参数），重试无意义
             if status is not None and 400 <= int(status) < 500:
                 raise
-            if attempt < _MAX_RETRIES - 1:
+            if backoff is not None:
                 logger.warning("模型调用瞬时失败（%s），%.0fs 后重试", exc, backoff)
                 await asyncio.sleep(backoff)
     assert last_exc is not None
@@ -190,17 +214,20 @@ class LiteLLMClient:
         self,
         *,
         litellm_model: str,
+        provider_type: str | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
         custom_options: dict[str, Any] | None = None,
     ) -> None:
         self._model = litellm_model
+        self._provider_type = provider_type
         self._api_base = api_base
         self._api_key = api_key
         self._custom_options = custom_options or {}
 
     async def complete(self, request: ModelRequest) -> ModelResult:
-        agg = await _stream_with_retry(self._base_kwargs(request))
+        kwargs, ignored = self._base_kwargs(request)
+        agg = await _stream_with_retry(kwargs, call_timeout_s=request.call_timeout_s)
         return ModelResult(
             text=agg.content,
             raw_response={
@@ -209,6 +236,8 @@ class LiteLLMClient:
                 "finish_reason": agg.finish_reason,
                 "chunks": agg.chunk_count,
                 "reasoning_chars": len(agg.reasoning_content),
+                "attempts": agg.attempts,
+                **({"ignored_params": ignored} if ignored else {}),
             },
             usage=agg.usage,
             started_at=agg.started_at,
@@ -216,13 +245,14 @@ class LiteLLMClient:
             total_latency_s=agg.total_latency_s,
             ttft_s=agg.ttft_s,
             generation_time_s=agg.generation_time_s,
+            finish_reason=agg.finish_reason,
         )
 
     async def complete_with_tools(self, request: ModelRequest, tools: list[dict[str, Any]]) -> ToolStep:
         """带 function calling 的一次调用（agent 循环用），流式聚合。"""
-        kwargs = self._base_kwargs(request)
+        kwargs, ignored = self._base_kwargs(request)
         kwargs["tools"] = tools
-        agg = await _stream_with_retry(kwargs)
+        agg = await _stream_with_retry(kwargs, call_timeout_s=request.call_timeout_s)
 
         assistant_message: dict[str, Any] = {"role": "assistant", "content": agg.content}
         if agg.tool_calls:
@@ -246,11 +276,23 @@ class LiteLLMClient:
                 "finish_reason": agg.finish_reason,
                 "chunks": agg.chunk_count,
                 "ttft_s": agg.ttft_s,
+                "attempts": agg.attempts,
+                **({"ignored_params": ignored} if ignored else {}),
             },
+            finish_reason=agg.finish_reason,
+            started_at=agg.started_at,
+            finished_at=agg.finished_at,
+            total_latency_s=agg.total_latency_s,
+            ttft_s=agg.ttft_s,
+            generation_time_s=agg.generation_time_s,
         )
 
-    def _base_kwargs(self, request: ModelRequest) -> dict[str, Any]:
-        """组装 litellm 调用参数（complete / complete_with_tools 共用）。"""
+    def _base_kwargs(self, request: ModelRequest) -> tuple[dict[str, Any], list[str]]:
+        """组装 litellm 调用参数（complete / complete_with_tools 共用）。
+
+        返回 (kwargs, 未生效参数列表)：未生效参数会写入原始事实，
+        避免“用户配置了但实际被静默丢弃”。
+        """
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": request.messages,
@@ -265,15 +307,24 @@ class LiteLLMClient:
             value = getattr(request, name)
             if value is not None:
                 kwargs[name] = value
-        if request.max_output_tokens is not None:
+        # max_output_tokens <= 0 统一按“不限制”处理：不传 max_tokens，由上游默认值决定
+        if request.max_output_tokens is not None and request.max_output_tokens > 0:
             kwargs["max_tokens"] = request.max_output_tokens
         if request.reasoning_effort is not None:
             kwargs["reasoning_effort"] = request.reasoning_effort
 
-        # Deployment 级与 Profile 级 provider 专属参数
+        ignored: list[str] = []
+        if request.reasoning_budget is not None:
+            builder = _BUDGET_PARAM_BUILDERS.get(self._provider_type or "")
+            if builder is not None:
+                kwargs.update(builder(int(request.reasoning_budget)))
+            else:
+                ignored.append("reasoning_budget")
+
+        # Deployment 级与 Profile 级 provider 专属参数（可覆盖以上同名参数）
         kwargs.update(self._custom_options)
         kwargs.update(request.provider_params)
-        return kwargs
+        return kwargs, ignored
 
 
 def build_litellm_model_string(provider_type: str, api_model_name: str) -> str:

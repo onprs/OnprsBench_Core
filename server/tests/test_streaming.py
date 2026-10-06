@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.runtime.base import ModelRequest
@@ -117,6 +119,24 @@ async def test_stream_retry_on_5xx(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _instant() -> None:
     return None
+
+
+@pytest.mark.asyncio
+async def test_stream_call_timeout_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """单次调用墙钟上限：超时视为确定性失败，不重试。"""
+    import litellm
+
+    calls = {"n": 0}
+
+    async def hanging(**kwargs):
+        calls["n"] += 1
+        await asyncio.sleep(10)
+        return _fake_stream([])
+
+    monkeypatch.setattr(litellm, "acompletion", hanging)
+    with pytest.raises(TimeoutError):
+        await _stream_with_retry({"model": "x", "messages": []}, call_timeout_s=0.05)
+    assert calls["n"] == 1  # 墙钟超时不重试
 
 
 @pytest.mark.asyncio

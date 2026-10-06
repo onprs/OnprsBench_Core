@@ -109,6 +109,7 @@ export function NewRunPage() {
 
   const options = useMemo(() => buildTargetOptions(deployments, profiles), [deployments, profiles]);
   const selectedInstallation = installations.find((i) => i.id === installationId);
+  const selectedSuite = selectedInstallation?.suites.find((s) => s.id === suiteId);
 
   const toggle = useCallback((set: Set<string>, key: string, apply: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -142,7 +143,13 @@ export function NewRunPage() {
     }
   }
 
-  const canSubmit = installationId && suiteId && solverKeys.size > 0 && judgeKeys.size > 0 && !submitting;
+  const canSubmit =
+    installationId &&
+    suiteId &&
+    (selectedSuite?.task_count ?? 0) > 0 &&
+    solverKeys.size > 0 &&
+    judgeKeys.size > 0 &&
+    !submitting;
 
   return (
     <div className="space-y-4">
@@ -180,8 +187,8 @@ export function NewRunPage() {
               </SelectTrigger>
               <SelectContent>
                 {selectedInstallation?.suites.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}（{s.task_count} 题）
+                  <SelectItem key={s.id} value={s.id} disabled={s.task_count === 0}>
+                    {s.name}（{s.task_count} 题{s.task_count === 0 ? "，不可运行" : ""}）
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import statistics
 from dataclasses import dataclass, field
 
@@ -12,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from ..models import (
+    ConfigSnapshot,
     JudgeExecution,
     Run,
     SolverExecution,
@@ -68,8 +70,12 @@ def run_results(session: Session, run_id: str) -> dict:
     verifier_rows = session.scalars(
         sa.select(VerifierExecution).where(VerifierExecution.run_id == run_id)
     ).all()
+    # completed 判定优先（与 Judge 取用的判定事实一致），其次取最近一次
     verifier_by_solver_execution: dict[str, VerifierExecution] = {}
-    for ve in sorted(verifier_rows, key=lambda r: r.started_at or run.created_at):
+    for ve in sorted(
+        verifier_rows,
+        key=lambda r: (r.status == "completed", r.started_at or run.created_at),
+    ):
         verifier_by_solver_execution[ve.solver_execution_id] = ve
 
     cost_by_owner: dict[str, float | None] = {}
@@ -95,6 +101,7 @@ def run_results(session: Session, run_id: str) -> dict:
         totals = [j.weighted_total for j in judges if j.weighted_total is not None]
         summary = summarize_judge_totals(totals)
         verifier = verifier_by_solver_execution.get(se.id)
+        raw = se.raw_response_json or {}
         target["entries"].append(
             {
                 "solver_execution_id": se.id,
@@ -105,6 +112,11 @@ def run_results(session: Session, run_id: str) -> dict:
                 "error": se.error,
                 "total_latency_s": se.total_latency_s,
                 "cost": cost_by_owner.get(se.id, 0.0),
+                # 花费轮次与截断事实（Solver 侧）
+                "turns": se.turns,
+                "finish_reason": se.finish_reason,
+                "truncated": bool(se.truncated),
+                "solver_mode": raw.get("solver_mode"),
                 "verifier": (
                     {
                         "verifier_execution_id": verifier.id,
@@ -145,6 +157,7 @@ def run_results(session: Session, run_id: str) -> dict:
         entries = target["entries"]
         means = [e["judge_score_summary"]["mean"] for e in entries if e["judge_score_summary"]["mean"] is not None]
         latencies = [e["total_latency_s"] for e in entries if e["total_latency_s"] is not None]
+        turns = [e["turns"] for e in entries if e["turns"] is not None]
         target_summaries.append(
             {
                 "deployment_id": target["deployment_id"],
@@ -159,6 +172,10 @@ def run_results(session: Session, run_id: str) -> dict:
                     else sum(e["cost"] for e in entries)
                 ),
                 "latency_mean_s": statistics.fmean(latencies) if latencies else None,
+                # 花费轮次对比字段：平均轮次 / 总轮次 / 被截断的任务数
+                "turns_mean": statistics.fmean(turns) if turns else None,
+                "turns_total": sum(turns) if turns else None,
+                "truncated_count": sum(1 for e in entries if e["truncated"]),
             }
         )
 
@@ -174,6 +191,7 @@ def run_results(session: Session, run_id: str) -> dict:
         },
         "wall_time": {
             "solver_s": run.solver_wall_time_s,
+            "verifier_s": run.verifier_wall_time_s,
             "judge_s": run.judge_wall_time_s,
             "total_s": run.total_wall_time_s,
         },
@@ -182,7 +200,7 @@ def run_results(session: Session, run_id: str) -> dict:
 
 
 def timeseries(session: Session, dataset_id: str | None = None) -> list[dict]:
-    """Score / Cost / Latency over time：按 Run × Solver Target 出点。"""
+    """Score / Cost / Latency / Turns over time：按 Run × Solver Target 出点。"""
     query = sa.select(Run).where(Run.status == "completed").order_by(Run.created_at)
     if dataset_id:
         query = query.where(Run.dataset_id == dataset_id)
@@ -205,6 +223,8 @@ def timeseries(session: Session, dataset_id: str | None = None) -> list[dict]:
                     "score_mean": target["score_mean"],
                     "total_cost": target["total_cost"],
                     "latency_mean_s": target["latency_mean_s"],
+                    "turns_mean": target["turns_mean"],
+                    "truncated_count": target["truncated_count"],
                 }
             )
     return points
@@ -236,6 +256,23 @@ def compare_runs(session: Session, run_ids: list[str]) -> dict:
     check("manifest_hash", "dataset manifest hash")
     check("suite_id", "suite")
     check("framework_version", "framework version")
+
+    # 冻结的评分口径一致性：judge prompt 或聚合算法变化时，分数不可直接比较；
+    # Solver / Judge 目标不同属于正常对比场景（跨 target 比较），不作为不可比原因
+    def snapshot_of(run: Run) -> dict:
+        snapshot = session.get(ConfigSnapshot, run.config_snapshot_id)
+        return snapshot.payload if snapshot else {}
+
+    def check_snapshot(field_name: str, label: str) -> None:
+        values = {
+            json.dumps(snapshot_of(r).get(field_name), sort_keys=True, ensure_ascii=False)
+            for r in runs
+        }
+        if len(values) > 1:
+            reasons.append(f"{label} 不一致")
+
+    check_snapshot("judge_prompt_version", "judge prompt 版本")
+    check_snapshot("aggregation_version", "聚合算法版本")
 
     # task revision 集合一致性
     revision_sets = []

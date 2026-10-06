@@ -15,7 +15,7 @@ import concurrent.futures
 import logging
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,17 +39,112 @@ from ..runtime.base import ModelRequest
 from ..runtime.factory import build_client
 from ..toolchain import ToolchainUnavailable
 from ..toolchain import repos as repo_toolchain
-from ..agents.diff import diff_workspace
-from ..agents.loop import run_agent_loop
+from ..agents.diff import diff_workspace_report
+from ..agents.loop import build_agent_system_prompt, run_agent_loop
 from ..verifier import service as verifier_service
+from ..verifier.extract import extract_code
 from . import aggregation, datasets, prompts
 from .pricing import ResolvedPricing, compute_cost, resolve_pricing
 
 logger = logging.getLogger(__name__)
 
+# 需要从工作区收集单文件解答的竞赛代码任务类型
+_CODE_TASK_TYPES = {"code_generation", "implementation"}
+# 约定解答文件名（按优先级）
+_SOLUTION_CANDIDATES = ("solution.cpp", "solution.cc", "solution.cxx", "solution.py", "main.cpp", "main.py")
+_CODE_SUFFIX_LANG = {".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".py": "python"}
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def resolve_agent_max_turns(profile: ReasoningProfile | None) -> int | None:
+    """解析 Agent 最大轮次：未配置 → 框架默认；0 → 不限制；>0 → 上限。"""
+    if profile is None or profile.agent_max_turns is None:
+        return settings.agent_max_turns
+    if profile.agent_max_turns <= 0:
+        return None
+    return profile.agent_max_turns
+
+
+def prepare_freeform_workspace(task_payload: dict, task_dir: Path | None, workspace: Path) -> set[str]:
+    """为无仓库契约的任务准备工作区：写入题面与 solver 可见附件。
+
+    返回初始文件相对路径集合，供解答收集时区分 agent 新增的文件。
+    """
+    created: set[str] = set()
+    workspace.mkdir(parents=True, exist_ok=True)
+    problem = task_payload["solver_visible"]["problem"]
+    (workspace / "problem.md").write_text(problem, encoding="utf-8", newline="\n")
+    created.add("problem.md")
+    if task_dir is None:
+        return created
+    for asset in task_payload["solver_visible"].get("assets") or []:
+        rel = str(asset.get("path") or "")
+        if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+            continue
+        source = task_dir / rel
+        if not source.is_file():
+            continue
+        target = workspace / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        created.add(Path(rel).as_posix())
+    return created
+
+
+def collect_workspace_solution(
+    workspace: Path, *, exclude: set[str] | None = None
+) -> dict | None:
+    """从 agent 工作区收集竞赛代码解答（优先约定文件名，否则取最近的代码文件）。
+
+    exclude 为工作区初始文件（题面与附件），不得当作解答提交。
+    """
+    excluded = exclude or set()
+    for name in _SOLUTION_CANDIDATES:
+        if name in excluded:
+            continue
+        path = workspace / name
+        if not path.is_file():
+            continue
+        code = path.read_text(encoding="utf-8", errors="replace")
+        language = _CODE_SUFFIX_LANG.get(path.suffix.lower())
+        if code.strip() and language:
+            return {"path": name, "language": language, "code": code}
+
+    candidates: list[tuple[float, Path]] = []
+    for path in workspace.rglob("*"):
+        if not path.is_file():
+            continue
+        language = _CODE_SUFFIX_LANG.get(path.suffix.lower())
+        if language is None:
+            continue
+        rel = path.relative_to(workspace).as_posix()
+        rel_parts = path.relative_to(workspace).parts
+        if rel in excluded or any(part in {".git", ".venv", "__pycache__", "assets"} for part in rel_parts):
+            continue
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    _, path = max(candidates)
+    code = path.read_text(encoding="utf-8", errors="replace")
+    if not code.strip():
+        return None
+    return {
+        "path": path.relative_to(workspace).as_posix(),
+        "language": _CODE_SUFFIX_LANG[path.suffix.lower()],
+        "code": code,
+    }
+
+
+def has_language_fence(text: str, language: str) -> bool:
+    """回答中是否已包含指定语言的可提取代码围栏。"""
+    extracted = extract_code(text or "")
+    return extracted is not None and extracted[0] == language
 
 
 @dataclass
@@ -77,7 +172,12 @@ class TargetSpec:
             seed=p.seed if p else None,
             provider_params=p.provider_params if p and p.provider_params else {},
             timeout_s=settings.llm_timeout_s,
+            call_timeout_s=settings.llm_call_timeout_s or None,
         )
+
+    def build_agent_request_template(self) -> ModelRequest:
+        """Agent 每轮调用的参数模板（messages 由循环逐轮填充）。"""
+        return self.build_request([])
 
 
 class PricingRegistry:
@@ -144,6 +244,70 @@ def _record_usage(
     return cost
 
 
+def _record_solver_usage(
+    *,
+    run_id: str,
+    owner_id: str,
+    usage,
+    pricing: tuple[str, ResolvedPricing] | None,
+    turn_records: list[dict],
+) -> None:
+    """写入 Solver 的 usage：有逐轮记录时按轮写多条，否则写一条聚合记录。
+
+    逐轮记录是 AGENTS.md 要求的“每次模型调用尽量记录”的实现：
+    agent 形态下每轮的 token / 耗时 / 结束原因均单独落库。
+    """
+    snapshot_id, resolved = (pricing if pricing else (None, None))
+
+    def cost_of(input_tokens, cached_tokens, output_tokens) -> float | None:
+        if resolved is None:
+            return None
+        return compute_cost(
+            resolved,
+            input_tokens=input_tokens,
+            cached_input_tokens=cached_tokens,
+            output_tokens=output_tokens,
+        )
+
+    rows: list[UsageRecord] = []
+    if turn_records:
+        for record in turn_records:
+            rows.append(
+                UsageRecord(
+                    run_id=run_id,
+                    owner_type="solver",
+                    owner_id=owner_id,
+                    input_tokens=record.get("input_tokens"),
+                    cached_input_tokens=record.get("cached_input_tokens"),
+                    output_tokens=record.get("output_tokens"),
+                    reasoning_tokens=record.get("reasoning_tokens"),
+                    pricing_snapshot_id=snapshot_id,
+                    cost=cost_of(
+                        record.get("input_tokens"),
+                        record.get("cached_input_tokens"),
+                        record.get("output_tokens"),
+                    ),
+                )
+            )
+    else:
+        rows.append(
+            UsageRecord(
+                run_id=run_id,
+                owner_type="solver",
+                owner_id=owner_id,
+                input_tokens=usage.input_tokens,
+                cached_input_tokens=usage.cached_input_tokens,
+                output_tokens=usage.output_tokens,
+                reasoning_tokens=usage.reasoning_tokens,
+                pricing_snapshot_id=snapshot_id,
+                cost=cost_of(usage.input_tokens, usage.cached_input_tokens, usage.output_tokens),
+            )
+        )
+
+    with session_scope() as session:
+        session.add_all(rows)
+
+
 def _task_repo_contract(task_payload: dict) -> tuple[str, str] | None:
     """任务声明的仓库契约（repo_url, base_commit），无则 None。"""
     verify = task_payload.get("verify")
@@ -160,7 +324,7 @@ def _task_repo_contract(task_payload: dict) -> tuple[str, str] | None:
 
 @dataclass
 class SolverCallOutcome:
-    """一次 Solver 调用的完整产出（oneshot 或 agent 形态统一）。"""
+    """一次 Solver 调用的完整产出（agent 统一形态，工具不可用时降级 oneshot）。"""
 
     response_text: str
     prompt_messages: list[dict]
@@ -171,74 +335,134 @@ class SolverCallOutcome:
     total_latency_s: float
     ttft_s: float | None = None
     generation_time_s: float | None = None
+    # 花费轮次（oneshot = 1）、末次结束原因、是否发生过输出预算耗尽、逐轮原始事实
+    turns: int | None = None
+    finish_reason: str | None = None
+    truncated: bool = False
+    turn_records: list[dict] = field(default_factory=list)
 
 
 async def _call_solver(
     spec: TargetSpec,
     task: TaskCache,
     execution_id: str,
+    task_dir: Path | None,
 ) -> SolverCallOutcome:
     """执行一次 Solver 调用。
 
-    返回 (response_text, prompt_messages, raw_response, usage, started_at, finished_at, latency)。
-    带仓库契约的任务走 agent 形态（工作区多轮修复，diff 作为回答）；
-    快照无法供给时降级为单轮问答并记录原因。
+    默认走 agent 形态：带仓库契约的任务在仓库工作副本中修复，其余任务在含
+    题面的自由工作区中作答（工作区产物自动成为回答的一部分）。框架级开关
+    关闭或客户端不支持工具调用时，降级为单轮问答并记录原因。
     """
     client = build_client(spec.deployment, spec.provider)
+    if settings.agent_solver_enabled and hasattr(client, "complete_with_tools"):
+        return await _call_solver_agent(spec, task, execution_id, task_dir, client)
+    return await _call_solver_oneshot(spec, task.payload, client, fallback_reason=None)
+
+
+async def _call_solver_agent(
+    spec: TargetSpec,
+    task: TaskCache,
+    execution_id: str,
+    task_dir: Path | None,
+    client,
+) -> SolverCallOutcome:
+    """Agent 形态：工作区多轮工具循环，工作区产物作为回答提交。"""
     task_payload = task.payload
     contract = _task_repo_contract(task_payload)
+    work_dir = (settings.verify_workspace_dir / f"solver-{execution_id}").resolve()
+    workspace = work_dir / ("repo" if contract is not None else "workspace")
+    pristine: Path | None = None
+    initial_files: set[str] = set()
 
-    if settings.agent_solver_enabled and contract is not None and hasattr(client, "complete_with_tools"):
-        repo_url, base_commit = contract
-        work_dir = (settings.verify_workspace_dir / f"solver-{execution_id}").resolve()
-        try:
+    try:
+        if contract is not None:
+            repo_url, base_commit = contract
             snapshot = repo_toolchain.fetch_repo_snapshot(repo_url, base_commit)
-            workspace = repo_toolchain.materialize_workspace(snapshot, work_dir / "repo")
-        except ToolchainUnavailable as exc:
-            logger.warning("solver 工作区无法供给，降级为单轮问答 task=%s: %s", task.task_id, exc)
-            shutil.rmtree(work_dir, ignore_errors=True)
-            return await _call_solver_oneshot(spec, task_payload, client, fallback_reason=str(exc))
+            pristine = snapshot
+            workspace = repo_toolchain.materialize_workspace(snapshot, workspace)
+        else:
+            initial_files = prepare_freeform_workspace(task_payload, task_dir, workspace)
+    except ToolchainUnavailable as exc:
+        logger.warning("solver 工作区无法供给，降级为单轮问答 task=%s: %s", task.task_id, exc)
+        shutil.rmtree(work_dir, ignore_errors=True)
+        return await _call_solver_oneshot(spec, task_payload, client, fallback_reason=str(exc))
 
-        try:
-            result = await run_agent_loop(
-                client,
-                problem=task_payload["solver_visible"]["problem"],
-                workspace=workspace,
-                max_turns=settings.agent_max_turns,
-                command_timeout_s=settings.agent_command_timeout_s,
-                timeout_s=settings.llm_timeout_s,
-            )
-            if result.stop_reason == "error":
-                raise RuntimeError(result.error or "agent 执行失败")
-            patch = diff_workspace(snapshot, workspace)
+    try:
+        result = await run_agent_loop(
+            client,
+            problem=task_payload["solver_visible"]["problem"],
+            workspace=workspace,
+            system_prompt=build_agent_system_prompt(task_payload.get("type")),
+            request_template=spec.build_agent_request_template(),
+            max_turns=resolve_agent_max_turns(spec.profile),
+            command_timeout_s=settings.agent_command_timeout_s,
+        )
+        if result.stop_reason == "error":
+            raise RuntimeError(result.error or "agent 执行失败")
+
+        if contract is not None:
+            diff_report = diff_workspace_report(pristine, workspace)
+            patch = diff_report.patch
             response_text = result.final_text or "（agent 未给出文字总结）"
             if patch.strip():
                 response_text += "\n\n```diff\n" + patch + "```\n"
-            raw = {
-                "solver_mode": "agent",
-                "turns": result.turns,
-                "stop_reason": result.stop_reason,
-                "messages": result.messages,
+            artifacts: dict = {
                 "patch_chars": len(patch),
+                "excluded_files": diff_report.excluded[:100],
+                "suspicious_files": diff_report.suspicious[:100],
             }
-            return SolverCallOutcome(
-                response_text=response_text,
-                prompt_messages=result.messages[:2],  # 初始 system + user
-                raw_response=raw,
-                usage=_usage_of(
-                    input_tokens=result.input_tokens,
-                    output_tokens=result.output_tokens,
-                    cached=result.cached_input_tokens,
-                    reasoning=result.reasoning_tokens,
-                ),
-                started_at=result.started_at,
-                finished_at=result.finished_at,
-                total_latency_s=result.wall_time_s,
-            )
-        finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
+        else:
+            response_text = result.final_text or ""
+            artifacts = {}
+            if task_payload.get("type") in _CODE_TASK_TYPES:
+                solution = collect_workspace_solution(workspace, exclude=initial_files)
+                if solution is not None:
+                    artifacts = {
+                        "solution_file": solution["path"],
+                        "solution_chars": len(solution["code"]),
+                    }
+                    # 回答中没有可提取代码块时，把工作区解答作为回答主体（
+                    # 截断/未总结的情形下仍能进入程序判定）
+                    if not has_language_fence(response_text, solution["language"]):
+                        prefix = response_text + "\n\n" if response_text.strip() else ""
+                        response_text = prefix + f"```{solution['language']}\n{solution['code'].rstrip()}\n```\n"
+                else:
+                    artifacts = {"solution_file": None}
 
-    return await _call_solver_oneshot(spec, task_payload, client, fallback_reason=None)
+        raw = {
+            "solver_mode": "agent",
+            "turns": result.turns,
+            "stop_reason": result.stop_reason,
+            "finish_reason": result.finish_reason,
+            "truncated_turns": result.truncated_turns,
+            "turn_records": result.turn_records,
+            "messages": result.messages,
+            "command_audit": result.command_audit,
+            **artifacts,
+        }
+        return SolverCallOutcome(
+            response_text=response_text,
+            prompt_messages=result.messages[:2],  # 初始 system + user
+            raw_response=raw,
+            usage=_usage_of(
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                cached=result.cached_input_tokens,
+                reasoning=result.reasoning_tokens,
+            ),
+            started_at=result.started_at,
+            finished_at=result.finished_at,
+            total_latency_s=result.wall_time_s,
+            # TTFT 取首轮首 token；agent 形态的生成时长没有单一含义，保持 NULL
+            ttft_s=result.turn_records[0].get("ttft_s") if result.turn_records else None,
+            turns=result.turns,
+            finish_reason=result.finish_reason,
+            truncated=result.truncated_turns > 0,
+            turn_records=result.turn_records,
+        )
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 async def _call_solver_oneshot(
@@ -247,7 +471,7 @@ async def _call_solver_oneshot(
     client,
     fallback_reason: str | None,
 ) -> SolverCallOutcome:
-    """单轮问答形态的 Solver 调用（原有路径）。"""
+    """单轮问答形态的 Solver 调用（工具链不可用时的降级路径）。"""
     messages = prompts.build_solver_messages(task_payload)
     result = await client.complete(spec.build_request(messages))
     raw = result.raw_response
@@ -263,6 +487,24 @@ async def _call_solver_oneshot(
         total_latency_s=result.total_latency_s,
         ttft_s=result.ttft_s,
         generation_time_s=result.generation_time_s,
+        turns=1,
+        finish_reason=result.finish_reason,
+        truncated=result.finish_reason == "length",
+        turn_records=[
+            {
+                "turn": 1,
+                "finish_reason": result.finish_reason,
+                "truncated": result.finish_reason == "length",
+                "tool_calls": [],
+                "content_chars": len(result.text or ""),
+                "input_tokens": getattr(result.usage, "input_tokens", None),
+                "cached_input_tokens": getattr(result.usage, "cached_input_tokens", None),
+                "output_tokens": getattr(result.usage, "output_tokens", None),
+                "reasoning_tokens": getattr(result.usage, "reasoning_tokens", None),
+                "ttft_s": result.ttft_s,
+                "total_latency_s": result.total_latency_s,
+            }
+        ],
     )
 
 
@@ -286,7 +528,6 @@ async def _run_solver_call(
 ) -> str:
     """执行一次 Solver 调用并落库，返回 solver_execution_id。"""
     async with semaphore:
-        messages = prompts.build_solver_messages(task.payload)
         with session_scope() as session:
             execution = SolverExecution(
                 run_id=run_id,
@@ -300,14 +541,19 @@ async def _run_solver_call(
                 profile_name=spec.profile.name if spec.profile else None,
                 status="running",
                 started_at=utcnow(),
-                prompt_json=None,  # agent 形态在调用后回填实际初始消息
+                prompt_json=None,  # 调用后回填实际初始消息
             )
             session.add(execution)
             session.flush()
             execution_id = execution.id
 
+            # 任务目录：无仓库契约的任务从这里取题面与 solver 附件
+            task_row = session.get(TaskCache, task.id)
+            installation = session.get(datasets.DatasetInstallation, task_row.installation_id)
+            task_dir = Path(installation.source_path) / task_row.task_path
+
         try:
-            outcome = await _call_solver(spec, task, execution_id)
+            outcome = await _call_solver(spec, task, execution_id, task_dir)
         except Exception as exc:
             logger.warning("solver 调用失败 run=%s task=%s: %s", run_id, task.task_id, exc)
             with session_scope() as session:
@@ -325,16 +571,19 @@ async def _run_solver_call(
             row.ttft_s = outcome.ttft_s
             row.generation_time_s = outcome.generation_time_s
             row.total_latency_s = outcome.total_latency_s
+            row.turns = outcome.turns
+            row.finish_reason = outcome.finish_reason
+            row.truncated = outcome.truncated
             row.prompt_json = outcome.prompt_messages
             row.response_text = outcome.response_text
             row.raw_response_json = outcome.raw_response
 
-        _record_usage(
+        _record_solver_usage(
             run_id=run_id,
-            owner_type="solver",
             owner_id=execution_id,
             usage=outcome.usage,
             pricing=pricing.get(spec.deployment.id),
+            turn_records=outcome.turn_records,
         )
         return execution_id
 
@@ -343,8 +592,13 @@ async def _run_verifier_call(
     run_id: str,
     solver_execution_id: str,
     semaphore: asyncio.Semaphore,
+    *,
+    force: bool = False,
 ) -> None:
-    """对已完成的 SolverExecution 执行程序判定契约（若有）。结果落库为 VerifierExecution。"""
+    """对已完成的 SolverExecution 执行程序判定契约（若有）。结果落库为 VerifierExecution。
+
+    force=True 用于重新评分时补齐缺失/失败过的判定事实（不重跑 Solver）。
+    """
     async with semaphore:
         with session_scope() as session:
             solver_execution = session.get(SolverExecution, solver_execution_id)
@@ -353,6 +607,15 @@ async def _run_verifier_call(
             task_payload = task.payload
             task_dir = Path(installation.source_path) / task.task_path
             response_text = solver_execution.response_text or ""
+            solver_meta = {
+                "turns": solver_execution.turns,
+                "truncated": bool(solver_execution.truncated),
+                "finish_reason": solver_execution.finish_reason,
+                "solver_mode": (solver_execution.raw_response_json or {}).get("solver_mode"),
+            }
+            # 重入保护：已有 completed 判定事实时不重复执行（force 时除外）
+            if not force and _latest_verifier_facts(session, solver_execution_id) is not None:
+                return
 
         if not verifier_service.has_verify_contract(task_payload):
             return
@@ -362,7 +625,7 @@ async def _run_verifier_call(
             execution = VerifierExecution(
                 run_id=run_id,
                 solver_execution_id=solver_execution_id,
-                verifier_kind=_verifier_kind(task_payload),
+                verifier_kind=verifier_service.verifier_kind(task_payload),
                 status="running",
                 started_at=utcnow(),
             )
@@ -377,6 +640,7 @@ async def _run_verifier_call(
                 task_dir=task_dir,
                 response_text=response_text,
                 work_dir=work_dir,
+                solver_meta=solver_meta,
             )
         except ToolchainUnavailable as exc:
             logger.warning("工具链无法供给，判定降级 run=%s solver_execution=%s: %s", run_id, solver_execution_id, exc)
@@ -414,14 +678,6 @@ async def _run_verifier_call(
             row.environment_json = outcome.environment
             row.log_tail = outcome.log_tail
             row.error = outcome.error
-
-
-def _verifier_kind(task_payload: dict) -> str:
-    verify = task_payload.get("verify") or {}
-    evaluation = verify.get("evaluation") or {}
-    if verify.get("base_commit") and evaluation.get("fail_to_pass") is not None:
-        return "swe_issue"
-    return "algorithm"
 
 
 def _latest_verifier_facts(session, solver_execution_id: str) -> dict | None:
@@ -620,6 +876,13 @@ async def _execute_run(run_id: str) -> None:
             run.verifier_wall_time_s = verifier_wall
             run.judge_wall_time_s = judge_wall
             run.total_wall_time_s = time.perf_counter() - run_t0
+            failed_solvers = session.scalar(
+                sa.select(sa.func.count())
+                .select_from(SolverExecution)
+                .where(SolverExecution.run_id == run_id, SolverExecution.status == "failed")
+            )
+            # 部分失败不改变 run 终态，但必须留下可追溯的错误摘要
+            run.error = f"{failed_solvers} 个 Solver 执行失败（其余已完成）" if failed_solvers else None
             _recompute_run_costs(session, run_id)
 
         logger.info(
@@ -635,7 +898,7 @@ async def _execute_run(run_id: str) -> None:
             run = session.get(Run, run_id)
             run.status = "cancelled"
             run.finished_at = utcnow()
-            _cancel_running_executions(session, run_id)
+            cancel_running_executions(session, run_id)
     except Exception as exc:
         logger.exception("run 失败 id=%s", run_id)
         with session_scope() as session:
@@ -645,9 +908,9 @@ async def _execute_run(run_id: str) -> None:
             run.error = str(exc)
 
 
-def _cancel_running_executions(session, run_id: str) -> None:
+def cancel_running_executions(session, run_id: str) -> None:
     """把该 Run 下仍处于 running/pending 的执行记录置为 cancelled。"""
-    for model_cls in (SolverExecution, JudgeExecution):
+    for model_cls in (SolverExecution, JudgeExecution, VerifierExecution):
         rows = session.scalars(
             sa.select(model_cls).where(
                 model_cls.run_id == run_id,
@@ -659,13 +922,59 @@ def _cancel_running_executions(session, run_id: str) -> None:
             row.finished_at = utcnow()
 
 
+def recover_interrupted_runs() -> int:
+    """服务启动时恢复上次进程遗留的执行中状态。
+
+    单进程 sidecar 重启后不存在仍在执行的后台任务：把 pending/running 的 Run
+    与执行记录标记为终态（原因可追溯），并清理崩溃时未执行 finally 的工作区。
+    """
+    with session_scope() as session:
+        runs = session.scalars(sa.select(Run).where(Run.status.in_(["pending", "running"]))).all()
+        for run in runs:
+            run.status = "failed"
+            run.error = "服务重启，执行已中断（启动时自动恢复）"
+            run.finished_at = utcnow()
+            cancel_running_executions(session, run.id)
+        recovered = len(runs)
+
+    if recovered:
+        logger.warning("已恢复 %d 个中断的 Run（标记为 failed）", recovered)
+
+    workspaces = settings.verify_workspace_dir
+    if workspaces.is_dir():
+        for child in workspaces.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+    return recovered
+
+
 async def _execute_rejudge(run_id: str, solver_execution_ids: list[str], judge_entries: list[dict]) -> None:
-    """对历史 Solver 回答重新评分：只新增 JudgeExecution，不动 Solver 原始记录。"""
+    """对历史 Solver 回答重新评分：只新增 JudgeExecution，不动 Solver 原始记录。
+
+    若历史判定事实缺失（首次判定 failed/unavailable），先补齐程序判定再评分。
+    """
     try:
         with session_scope() as session:
             run = session.get(Run, run_id)
             snapshot_payload = {"judges": judge_entries}
             judges = _load_target_specs(session, snapshot_payload, "judges")
+            need_verify: list[str] = []
+            for se_id in solver_execution_ids:
+                solver_execution = session.get(SolverExecution, se_id)
+                if solver_execution is None:
+                    continue
+                task = session.get(TaskCache, solver_execution.task_cache_id)
+                if not verifier_service.has_verify_contract(task.payload):
+                    continue
+                if _latest_verifier_facts(session, se_id) is None:
+                    need_verify.append(se_id)
+
+        if need_verify:
+            logger.info("重新评分前补齐程序判定 run=%s 共 %d 项", run_id, len(need_verify))
+            verifier_sem = asyncio.Semaphore(settings.verifier_concurrency)
+            await asyncio.gather(
+                *(_run_verifier_call(run_id, se_id, verifier_sem, force=True) for se_id in need_verify)
+            )
 
         pricing = PricingRegistry()
         for spec in judges:
@@ -684,7 +993,7 @@ async def _execute_rejudge(run_id: str, solver_execution_ids: list[str], judge_e
     except asyncio.CancelledError:
         logger.info("rejudge 被取消 run=%s", run_id)
         with session_scope() as session:
-            _cancel_running_executions(session, run_id)
+            cancel_running_executions(session, run_id)
 
 
 def run_snapshot_payload(session, run: Run) -> dict:
@@ -721,7 +1030,10 @@ class RunManager:
         if self._loop is None or not self._loop.is_running():
             raise RuntimeError("事件循环未绑定，无法启动后台任务")
         # 路由 handler 运行在 threadpool，需线程安全地提交到主事件循环
-        self._tasks[run_id] = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        self._tasks[run_id] = future
+        # 完成后清理任务表，避免长期运行累积已完成条目
+        future.add_done_callback(lambda _f: self._tasks.pop(run_id, None))
 
     def start_run(self, run_id: str) -> None:
         self._submit(run_id, _execute_run(run_id))

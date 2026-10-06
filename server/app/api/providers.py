@@ -81,6 +81,7 @@ def profile_dict(p: ReasoningProfile) -> dict:
         "top_p": p.top_p,
         "seed": p.seed,
         "provider_params": p.provider_params,
+        "agent_max_turns": p.agent_max_turns,
     }
 
 

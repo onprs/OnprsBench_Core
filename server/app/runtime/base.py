@@ -19,13 +19,18 @@ class ModelRequest:
     messages: list[dict[str, str]]
     # 推理与采样参数（None 表示不传递）
     reasoning_effort: str | None = None
+    # 思考预算（token）：仅对 LiteLLM 有明确映射的 provider 传递，其余 provider 记录为未生效
     reasoning_budget: int | None = None
+    # 可见回答的输出上限；None 或 <=0 表示不限制（由上游默认值决定）
     max_output_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
     seed: int | None = None
     provider_params: dict[str, Any] = field(default_factory=dict)
+    # 单次模型调用的 HTTP/流超时
     timeout_s: float = 600.0
+    # 单次模型调用的墙钟上限（含重试与长思考）；None 表示不限制
+    call_timeout_s: float | None = None
 
 
 @dataclass
@@ -49,6 +54,8 @@ class ModelResult:
     # 非流式调用通常无法获得 TTFT；不支持时保持 None
     ttft_s: float | None = None
     generation_time_s: float | None = None
+    # 上游结束原因（stop / length / tool_calls / content_filter / …）
+    finish_reason: str | None = None
 
 
 class ModelClient(Protocol):
@@ -75,6 +82,12 @@ class ToolStep:
     assistant_message: dict[str, Any]  # 可原样回放进 messages 的 assistant 消息
     usage: UsageInfo
     raw_response: dict[str, Any] | None = None
+    finish_reason: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    total_latency_s: float | None = None
+    ttft_s: float | None = None
+    generation_time_s: float | None = None
 
 
 class ToolsCapableClient(Protocol):

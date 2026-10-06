@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 
-JUDGE_PROMPT_VERSION = "judge-v2"
-SOLVER_PROMPT_VERSION = "solver-v2"
+JUDGE_PROMPT_VERSION = "judge-v3"
+SOLVER_PROMPT_VERSION = "solver-agent-v3"
 
 _SOLVER_SYSTEM = (
     "你是一名严谨的解题者。请直接、完整地回答用户给出的问题，展示关键推理过程。"
@@ -77,7 +77,7 @@ def _format_anchors(anchors: list[dict]) -> str:
 def _format_verifier_facts(facts: dict | None) -> str:
     if not facts:
         return ""
-    return f"""
+    text = f"""
 【程序判定事实】
 以下事实由框架在隔离环境中实际执行判定契约得到（应用补丁、运行测试/对拍），
 不是候选回答的自称。凡评分量规维度描述中声明"程序 verifier 判定"的维度，
@@ -87,6 +87,14 @@ def _format_verifier_facts(facts: dict | None) -> str:
 {json.dumps(facts, ensure_ascii=False, indent=2)}
 ```
 """
+    solver = facts.get("solver") or {}
+    if solver.get("truncated"):
+        text += (
+            "\n注意：候选回答曾因输出预算耗尽被截断（判定事实 solver.truncated 为 true）。"
+            "评分只能依据回答中实际出现的产物：截断本身不额外扣分，"
+            "但不得假设未呈现的修复或代码。\n"
+        )
+    return text
 
 
 def build_judge_messages(

@@ -406,6 +406,29 @@ function ProviderEditDialog({
   );
 }
 
+function numberOrNull(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Reasoning Profile 关键参数摘要（列表悬浮提示） */
+function describeProfile(profile: ReasoningProfile): string {
+  const parts: string[] = [];
+  if (profile.reasoning_effort) parts.push(`思考程度 ${profile.reasoning_effort}`);
+  if (profile.reasoning_budget !== null) parts.push(`思考预算 ${profile.reasoning_budget}`);
+  if (profile.max_output_tokens !== null) parts.push(`输出上限 ${profile.max_output_tokens}`);
+  parts.push(
+    profile.agent_max_turns === null
+      ? "轮次默认"
+      : profile.agent_max_turns === 0
+        ? "轮次不限制"
+        : `轮次上限 ${profile.agent_max_turns}`
+  );
+  return parts.join(" · ");
+}
+
 // ---------------------------------------------------------------------------
 // Deployment 标签页
 // ---------------------------------------------------------------------------
@@ -435,6 +458,9 @@ function DeploymentsTab({
   const [profileFor, setProfileFor] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("");
   const [profileEffort, setProfileEffort] = useState("");
+  const [profileBudget, setProfileBudget] = useState("");
+  const [profileMaxTokens, setProfileMaxTokens] = useState("");
+  const [profileMaxTurns, setProfileMaxTurns] = useState("");
   const [profileTemp, setProfileTemp] = useState("");
   const [editing, setEditing] = useState<Deployment | null>(null);
   const { confirm, confirmElement } = useConfirm();
@@ -499,12 +525,18 @@ function DeploymentsTab({
       await api.post("/api/reasoning-profiles", {
         deployment_id: profileFor,
         name: profileName,
-        reasoning_effort: profileEffort || null,
-        temperature: profileTemp ? Number(profileTemp) : null,
+        reasoning_effort: profileEffort.trim() || null,
+        reasoning_budget: numberOrNull(profileBudget),
+        max_output_tokens: numberOrNull(profileMaxTokens),
+        agent_max_turns: profileMaxTurns.trim() === "" ? null : numberOrNull(profileMaxTurns),
+        temperature: numberOrNull(profileTemp),
       });
       setProfileFor(null);
       setProfileName("");
       setProfileEffort("");
+      setProfileBudget("");
+      setProfileMaxTokens("");
+      setProfileMaxTurns("");
       setProfileTemp("");
       await onChanged();
     } catch (e) {
@@ -610,7 +642,7 @@ function DeploymentsTab({
                       {profiles
                         .filter((p) => p.deployment_id === d.id)
                         .map((p) => (
-                          <Badge key={p.id} variant="secondary" className="gap-1">
+                          <Badge key={p.id} variant="secondary" className="gap-1" title={describeProfile(p)}>
                             {p.name}
                             <button
                               type="button"
@@ -658,13 +690,36 @@ function DeploymentsTab({
               <Label>名称</Label>
               <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="low / medium / high" />
             </div>
-            <div className="space-y-1">
-              <Label>reasoning_effort</Label>
-              <Input value={profileEffort} onChange={(e) => setProfileEffort(e.target.value)} placeholder="可选" />
-            </div>
-            <div className="space-y-1">
-              <Label>temperature</Label>
-              <Input value={profileTemp} onChange={(e) => setProfileTemp(e.target.value)} placeholder="可选" />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>思考程度</Label>
+                <Input value={profileEffort} onChange={(e) => setProfileEffort(e.target.value)} placeholder="low / medium / high / max" />
+              </div>
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1">
+                  思考预算（token）
+                  <HelpTip text="仅部分 Provider 支持；留空表示不指定" />
+                </Label>
+                <Input value={profileBudget} onChange={(e) => setProfileBudget(e.target.value)} placeholder="留空 = 不指定" />
+              </div>
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1">
+                  最大输出 token
+                  <HelpTip text="思考型模型的思考与回答共享该预算；留空表示不限制" />
+                </Label>
+                <Input value={profileMaxTokens} onChange={(e) => setProfileMaxTokens(e.target.value)} placeholder="留空 = 不限制" />
+              </div>
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1">
+                  最大执行轮次
+                  <HelpTip text="Agent 在任务中最多执行多少轮工具调用；留空使用默认上限，填 0 表示不限制" />
+                </Label>
+                <Input value={profileMaxTurns} onChange={(e) => setProfileMaxTurns(e.target.value)} placeholder="留空 = 默认，0 = 不限制" />
+              </div>
+              <div className="space-y-1">
+                <Label>采样温度</Label>
+                <Input value={profileTemp} onChange={(e) => setProfileTemp(e.target.value)} placeholder="留空 = 不指定" />
+              </div>
             </div>
             <Button onClick={createProfile} disabled={!profileName}>
               创建

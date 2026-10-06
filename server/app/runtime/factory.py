@@ -33,6 +33,7 @@ def build_client(deployment: Deployment, provider: Provider) -> ModelClient:
     api_base = deployment.endpoint_override or provider.base_url
     return LiteLLMClient(
         litellm_model=build_litellm_model_string(provider.type, deployment.api_model_name),
+        provider_type=provider.type,
         api_base=api_base,
         api_key=api_key,
         custom_options=deployment.custom_options,

@@ -25,16 +25,23 @@ class Settings(BaseModel):
     protocol_schema_path: Path
     # Solver 并发度（同一 Run 内并行的 solver 调用上限）
     solver_concurrency: int = 4
-    # 单次模型调用超时（秒）
+    # 单次模型调用的 HTTP/流超时（秒）
     llm_timeout_s: float = 600.0
+    # 单次模型调用的墙钟上限（秒，含长思考与重试）；0 = 不限制
+    llm_call_timeout_s: float = 1800.0
 
-    # ---- Agent 形态 Solver（带工作区的任务，如 issue_resolution） ----
-    # 开启后，带 SWE 判定契约的任务由 agent 在仓库工作副本中多轮修复（而非单轮盲答）
+    # ---- Agent 形态 Solver（统一执行形态） ----
+    # 关闭后所有任务退化为单轮问答（仅用于故障排查）
     agent_solver_enabled: bool = True
-    # agent 最大工具循环轮次
+    # 未在 Reasoning Profile 中配置时的默认最大工具循环轮次
     agent_max_turns: int = 40
     # agent 单条命令超时（秒）
     agent_command_timeout_s: int = 120
+
+    # ---- Agent 命令沙箱 ----
+    # enforce：命令白名单 / 参数校验 / 环境清理 / Python 网络限制全部生效（拒绝违规命令）
+    # audit：只记录不阻断（调试与兼容模式）
+    agent_sandbox_mode: str = "enforce"
 
     # ---- 程序判定（verifier） ----
     # 总开关；关闭后所有任务退化为纯 LLM 评分

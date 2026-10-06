@@ -20,7 +20,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     let detail = resp.statusText;
     try {
       const data = await resp.json();
-      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail ?? data);
+      const payload = data.detail ?? data;
+      if (typeof payload === "string") {
+        detail = payload;
+      } else if (payload && typeof payload === "object") {
+        const parts: string[] = [];
+        if (typeof payload.message === "string") parts.push(payload.message);
+        if (Array.isArray(payload.errors)) parts.push(...payload.errors.map((item: unknown) => String(item)));
+        if (typeof payload.hint === "string") parts.push(`提示：${payload.hint}`);
+        detail = parts.length > 0 ? parts.join("\n") : JSON.stringify(payload);
+      }
     } catch {
       /* 保留 statusText */
     }
@@ -91,6 +100,8 @@ export interface ReasoningProfile {
   top_p: number | null;
   seed: number | null;
   provider_params: Record<string, unknown>;
+  /** Agent 最大工具循环轮次：null = 框架默认；0 = 不限制 */
+  agent_max_turns: number | null;
 }
 
 export interface SuiteInfo {
@@ -107,6 +118,8 @@ export interface DatasetInstallation {
   dataset_revision: string;
   protocol_version: string;
   manifest_hash: string;
+  /** 分发形态：standard（判定资源按需下载）/ full（附带资源，可离线判定） */
+  distribution: "standard" | "full" | string;
   source_path: string;
   installed_at: string;
   suites: SuiteInfo[];
@@ -144,6 +157,7 @@ export interface Run {
   started_at: string | null;
   finished_at: string | null;
   solver_wall_time_s: number | null;
+  verifier_wall_time_s: number | null;
   judge_wall_time_s: number | null;
   total_wall_time_s: number | null;
   solver_cost: number | null;
@@ -188,6 +202,14 @@ export interface TaskEntry {
   error: string | null;
   total_latency_s: number | null;
   cost: number | null;
+  /** 实际花费的模型调用轮次 */
+  turns: number | null;
+  /** 末次调用的结束原因（stop / length / tool_calls） */
+  finish_reason: string | null;
+  /** 是否发生过输出预算耗尽 */
+  truncated: boolean;
+  /** oneshot / agent / oneshot_fallback */
+  solver_mode: string | null;
   judge_score_summary: JudgeScoreSummary;
   judges: JudgeResult[];
 }
@@ -201,6 +223,10 @@ export interface TargetSummary {
   score_mean: number | null;
   total_cost: number | null;
   latency_mean_s: number | null;
+  /** 花费轮次：平均 / 总计 / 被截断任务数 */
+  turns_mean: number | null;
+  turns_total: number | null;
+  truncated_count: number;
 }
 
 export interface RunResults {
@@ -208,7 +234,7 @@ export interface RunResults {
   status: string;
   targets: TargetSummary[];
   entries_by_target: Record<string, TaskEntry[]>;
-  wall_time: { solver_s: number | null; judge_s: number | null; total_s: number | null };
+  wall_time: { solver_s: number | null; verifier_s: number | null; judge_s: number | null; total_s: number | null };
   cost: { solver: number | null; judge: number | null; total: number | null };
 }
 
@@ -230,4 +256,6 @@ export interface TimeseriesPoint {
   score_mean: number | null;
   total_cost: number | null;
   latency_mean_s: number | null;
+  turns_mean: number | null;
+  truncated_count: number;
 }

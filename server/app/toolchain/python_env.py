@@ -79,6 +79,47 @@ def venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def uv_version() -> str | None:
+    """返回自带/系统 uv 的版本字符串（判定环境可复现信息）。"""
+    try:
+        uv = ensure_uv()
+        result = subprocess.run([str(uv), "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError, ToolchainUnavailable):
+        return None
+    version = (result.stdout or "").strip()
+    return version or None
+
+
+def python_version(python_path: Path) -> str | None:
+    """返回指定解释器的版本字符串（判定环境可复现信息）。"""
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", "import sys; print(sys.version.split()[0])"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    version = (result.stdout or "").strip()
+    return version or None
+
+
+def pip_freeze(venv_py: Path) -> str | None:
+    """返回 venv 内已安装依赖清单（判定环境可复现信息）。"""
+    try:
+        uv = ensure_uv()
+        result = subprocess.run(
+            [str(uv), "pip", "freeze", "--python", str(venv_py.resolve())],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError, ToolchainUnavailable):
+        return None
+    text = (result.stdout or "").strip()
+    return text or None
+
 def create_venv(python_path: Path, venv_dir: Path) -> Path:
     """在 venv_dir 创建虚拟环境，返回 venv 内 python 路径。已存在则幂等复用。"""
     py = venv_python(venv_dir)
@@ -96,7 +137,9 @@ def create_venv(python_path: Path, venv_dir: Path) -> Path:
 _pip_lock = threading.Lock()
 
 
-def pip_install(venv_py: Path, args: list[str], *, cwd: Path | None = None) -> None:
+def pip_install(
+    venv_py: Path, args: list[str], *, cwd: Path | None = None, timeout_s: float | None = None
+) -> None:
     """向 venv 安装依赖（经 uv，利用其全局缓存加速重复安装）。
 
     SETUPTOOLS_SCM_PRETEND_VERSION：归档快照不含 .git 元数据，使用
@@ -109,9 +152,10 @@ def pip_install(venv_py: Path, args: list[str], *, cwd: Path | None = None) -> N
     env["VIRTUAL_ENV"] = str(venv_py.parent.parent)
     env.setdefault("SETUPTOOLS_SCM_PRETEND_VERSION", "1.0.0")
     command = [str(a) for a in [uv, "pip", "install", "--python", str(venv_py.resolve()), *args]]
+    effective_timeout = timeout_s or settings.verify_step_timeout_s
     with _pip_lock:
         for attempt in (1, 2):  # 缓存竞争等瞬时失败重试一次
-            result = _run(command, cwd=cwd, timeout_s=settings.verify_step_timeout_s, env=env)
+            result = _run(command, cwd=cwd, timeout_s=effective_timeout, env=env)
             if result.returncode == 0:
                 return
             if attempt == 1:

@@ -72,6 +72,29 @@ def _validate_targets(db: Session, targets: list[TargetSpecIn], role: str) -> No
                 raise HTTPException(404, f"{role} reasoning profile 无效: {t.reasoning_profile_id}")
 
 
+def _profile_snapshots(db: Session, targets: list[TargetSpecIn]) -> dict[str, dict]:
+    """冻结 Reasoning Profile 的完整参数：profile 行后续变化不影响历史 Run 复现。"""
+    snapshots: dict[str, dict] = {}
+    for target in targets:
+        if not target.reasoning_profile_id or target.reasoning_profile_id in snapshots:
+            continue
+        profile = db.get(ReasoningProfile, target.reasoning_profile_id)
+        if profile is None:
+            continue
+        snapshots[profile.id] = {
+            "name": profile.name,
+            "reasoning_effort": profile.reasoning_effort,
+            "reasoning_budget": profile.reasoning_budget,
+            "max_output_tokens": profile.max_output_tokens,
+            "temperature": profile.temperature,
+            "top_p": profile.top_p,
+            "seed": profile.seed,
+            "provider_params": profile.provider_params,
+            "agent_max_turns": profile.agent_max_turns,
+        }
+    return snapshots
+
+
 @router.post("", status_code=201)
 def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
     installation = db.get(DatasetInstallation, body.installation_id)
@@ -87,15 +110,20 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
         tasks = dataset_service.get_suite_tasks(db, installation, body.suite_id)
     except dataset_service.DatasetValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
+    if not tasks:
+        # metadata-only 坐标系（external suite）没有可运行内容
+        raise HTTPException(422, f"suite {body.suite_id} 没有可运行的 task")
 
     # 冻结 config snapshot：Run 可复现性的核心
     snapshot_payload = {
         "suite_id": body.suite_id,
         "judge_prompt_version": prompts.JUDGE_PROMPT_VERSION,
+        "solver_prompt_version": prompts.SOLVER_PROMPT_VERSION,
         "aggregation_version": aggregation.AGGREGATION_VERSION,
         "solvers": [t.model_dump() for t in body.solvers],
         "judges": [t.model_dump() for t in body.judges],
         "task_revisions": {t.task_id: t.revision for t in tasks},
+        "profile_snapshots": _profile_snapshots(db, [*body.solvers, *body.judges]),
     }
 
     with session_scope() as session:
@@ -227,11 +255,12 @@ def cancel_run(run_id: str, db: Session = Depends(get_db)) -> dict:
     if run.status not in ("pending", "running"):
         raise HTTPException(409, f"run 已处于终态: {run.status}")
     if not run_manager.cancel(run_id):
-        # 后台任务不在（如服务重启后遗留的 running 状态）：直接标记取消
-        run.status = "cancelled"
-        from ..services.runner import utcnow
+        # 后台任务不在（如服务重启后遗留的 running 状态）：直接标记终态并清理子执行记录
+        from ..services.runner import cancel_running_executions, utcnow
 
+        run.status = "cancelled"
         run.finished_at = utcnow()
+        cancel_running_executions(db, run_id)
         db.commit()
     return {"run_id": run_id, "status": "cancelling"}
 

@@ -13,6 +13,27 @@ logger = logging.getLogger(__name__)
 LOG_TAIL_LIMIT = 4000
 
 
+class VerifyTimeout(RuntimeError):
+    """判定整体墙钟超时（settings.verify_timeout_s）。"""
+
+
+def deadline_at(timeout_s: float | None) -> float | None:
+    """把整体超时（秒）转换为单调时钟截止点；None/<=0 表示不限制。"""
+    if not timeout_s or timeout_s <= 0:
+        return None
+    return time.monotonic() + timeout_s
+
+
+def step_timeout(deadline: float | None, default_s: float) -> float:
+    """返回该步骤可用的超时（受整体墙钟约束）；已无剩余时间时抛 VerifyTimeout。"""
+    if deadline is None:
+        return default_s
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise VerifyTimeout(f"判定整体超时（{default_s:.0f}s 步骤无剩余预算）")
+    return max(1.0, min(default_s, remaining))
+
+
 @dataclass
 class VerifyOutcome:
     """一次程序判定的结果（原始事实）。"""
@@ -23,6 +44,12 @@ class VerifyOutcome:
     environment: dict = field(default_factory=dict)  # 工具链版本等可复现信息
     log_tail: str = ""
     error: str | None = None
+
+    def with_solver_meta(self, meta: dict | None) -> "VerifyOutcome":
+        """附加 Solver 侧元信息（截断/轮次），供 judge 区分“答错”与“被截断”。"""
+        if meta:
+            self.facts["solver"] = {k: v for k, v in meta.items() if v is not None}
+        return self
 
 
 @dataclass
@@ -49,7 +76,8 @@ def run_command(
             [str(a) for a in args],
             cwd=cwd,
             env=env,
-            input=stdin_text,
+            # 无显式输入时关闭 stdin，避免子进程阻塞等待终端输入
+            input=stdin_text if stdin_text is not None else "",
             capture_output=True,
             text=True,
             encoding="utf-8",

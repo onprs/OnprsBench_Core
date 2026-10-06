@@ -21,9 +21,17 @@ import patch_ng
 
 from ..config import settings
 from ..toolchain import ToolchainUnavailable
-from ..toolchain.python_env import create_venv, ensure_python, pip_install, venv_python
+from ..toolchain.python_env import (
+    create_venv,
+    ensure_python,
+    pip_freeze,
+    pip_install,
+    python_version,
+    uv_version,
+    venv_python,
+)
 from ..toolchain.repos import fetch_repo_snapshot, materialize_workspace
-from .base import VerifyOutcome, run_command, tail
+from .base import VerifyOutcome, run_command, step_timeout, tail
 from .extract import extract_patch
 
 logger = logging.getLogger(__name__)
@@ -53,7 +61,9 @@ def _apply_patch(repo_dir: Path, patch_text: str) -> tuple[bool, str]:
         return False, "补丁应用失败（hunk 不匹配）"
 
 
-def _run_setup_steps(venv_py: Path, repo_dir: Path, steps: list[str]) -> tuple[bool, str]:
+def _run_setup_steps(
+    venv_py: Path, repo_dir: Path, steps: list[str], deadline_at: float | None = None
+) -> tuple[bool, str]:
     """执行 environment.setup：git 步骤由框架快照供给替代；pip 步骤经 uv；其余原样执行。"""
     logs: list[str] = []
     for step in steps:
@@ -65,12 +75,22 @@ def _run_setup_steps(venv_py: Path, repo_dir: Path, steps: list[str]) -> tuple[b
         if command.startswith("pip install"):
             args = shlex.split(command)[2:]
             try:
-                pip_install(venv_py, args, cwd=repo_dir)
+                pip_install(
+                    venv_py,
+                    args,
+                    cwd=repo_dir,
+                    timeout_s=step_timeout(deadline_at, settings.verify_step_timeout_s),
+                )
             except ToolchainUnavailable as exc:
                 return False, f"依赖安装失败（{command}）: {exc}"
             logs.append(f"$ {command} -> ok")
             continue
-        result = run_command(command, cwd=repo_dir, timeout_s=settings.verify_step_timeout_s, env=None)
+        result = run_command(
+            command,
+            cwd=repo_dir,
+            timeout_s=step_timeout(deadline_at, settings.verify_step_timeout_s),
+            env=None,
+        )
         logs.append(f"$ {command}\n{result.stdout}{result.stderr}")
         if result.returncode != 0:
             return False, f"setup 步骤失败（{command}）"
@@ -132,8 +152,15 @@ def _parse_junit(report: Path) -> dict[str, str]:
     return aggregated
 
 
-def _run_pytest(venv_py: Path, repo_dir: Path, targets: list[str], report: Path) -> tuple[dict[str, str], str]:
+def _run_pytest(
+    venv_py: Path,
+    repo_dir: Path,
+    targets: list[str],
+    report: Path,
+    deadline_at: float | None = None,
+) -> tuple[dict[str, str], str]:
     """运行 pytest 并返回 ({nodeid: outcome}, 日志)。"""
+    timeout_s = step_timeout(deadline_at, settings.verify_step_timeout_s)
     result = run_command(
         [
             str(venv_py), "-m", "pytest",
@@ -143,15 +170,45 @@ def _run_pytest(venv_py: Path, repo_dir: Path, targets: list[str], report: Path)
             "-q", "--tb=short",
         ],
         cwd=repo_dir,
-        timeout_s=settings.verify_step_timeout_s,
+        timeout_s=timeout_s,
     )
     log = result.stdout + ("\n" + result.stderr if result.stderr else "")
     if result.timed_out:
-        log += f"\n[verifier] pytest 超时（{settings.verify_step_timeout_s}s）"
+        log += f"\n[verifier] pytest 超时（{timeout_s:.0f}s）"
     return _parse_junit(report), tail(log)
 
 
-def verify_swe(task_dir: Path, verify: dict, response_text: str, work_dir: Path) -> VerifyOutcome:
+def _resolve_declared_outcomes(declared: list[str], collected: dict[str, str]) -> dict[str, str]:
+    """把契约声明的 nodeid 解析到实际采集结果。
+
+    契约可以声明 pytest nodeid 前缀（文件或类），此时该前缀下的全部用例
+    都必须通过（取最差结果）；任何未采集到的声明项记为 not_found，
+    从而把“漏跑”视为不通过而不是静默忽略。
+    """
+    severity = {"passed": 0, "skipped": 1, "failed": 2, "error": 3, "not_found": 4}
+    resolved: dict[str, str] = {}
+    for nodeid in declared:
+        if nodeid in collected:
+            resolved[nodeid] = collected[nodeid]
+            continue
+        prefix = nodeid + "::"
+        matched = [
+            outcome for key, outcome in collected.items() if key.startswith(prefix)
+        ]
+        if not matched:
+            resolved[nodeid] = "not_found"
+            continue
+        resolved[nodeid] = max(matched, key=lambda outcome: severity.get(outcome, 4))
+    return resolved
+
+
+def verify_swe(
+    task_dir: Path,
+    verify: dict,
+    response_text: str,
+    work_dir: Path,
+    deadline_at: float | None = None,
+) -> VerifyOutcome:
     """执行 SWE 判定契约，返回判定事实。"""
     started = time.perf_counter()
     work_dir = work_dir.resolve()  # uv 等子进程对相对路径的解析依赖 cwd，统一绝对化
@@ -196,11 +253,15 @@ def verify_swe(task_dir: Path, verify: dict, response_text: str, work_dir: Path)
     repo_dir = materialize_workspace(snapshot, work_dir / "repo")
     python_path = ensure_python(python_spec)
     environment["python_executable"] = str(python_path)
+    environment["python_runtime"] = python_version(python_path)
+    environment["uv"] = uv_version()
     venv_py = create_venv(python_path, work_dir / ".venv")
-    ok, setup_log = _run_setup_steps(venv_py, repo_dir, setup_steps)
+    ok, setup_log = _run_setup_steps(venv_py, repo_dir, setup_steps, deadline_at)
     logs.append(setup_log)
     if not ok:
         return VerifyOutcome("failed", "swe_issue", facts, environment, tail("\n".join(logs)), error=setup_log)
+    # 记录实际安装的依赖版本（判定环境可复现信息）
+    environment["dependencies"] = tail(pip_freeze(venv_py) or "", 4000) or None
 
     # 2. judge 侧测试补丁
     for rel in test_patches:
@@ -221,24 +282,29 @@ def verify_swe(task_dir: Path, verify: dict, response_text: str, work_dir: Path)
     # 4. 测试判定
     f2p_outcomes: dict[str, str] = {}
     if fail_to_pass:
-        f2p_outcomes, f2p_log = _run_pytest(venv_py, repo_dir, fail_to_pass, work_dir / "f2p.xml")
+        f2p_outcomes, f2p_log = _run_pytest(venv_py, repo_dir, fail_to_pass, work_dir / "f2p.xml", deadline_at)
         logs.append(f"[FAIL_TO_PASS]\n{f2p_log}")
-    facts["fail_to_pass_results"] = {
-        nodeid: f2p_outcomes.get(nodeid, "not_found") for nodeid in fail_to_pass
-    }
+    facts["fail_to_pass_results"] = _resolve_declared_outcomes(fail_to_pass, f2p_outcomes)
     facts["fail_to_pass_all_passed"] = all(
         v == "passed" for v in facts["fail_to_pass_results"].values()
     ) and bool(fail_to_pass)
 
-    p2p_summary = {"total": 0, "passed": 0, "failed": 0, "error": 0, "skipped": 0}
+    p2p_summary = {"total": 0, "passed": 0, "failed": 0, "error": 0, "skipped": 0, "not_found": 0}
+    p2p_results: dict[str, str] = {}
     if pass_to_pass:
-        p2p_outcomes, p2p_log = _run_pytest(venv_py, repo_dir, pass_to_pass, work_dir / "p2p.xml")
+        p2p_outcomes, p2p_log = _run_pytest(venv_py, repo_dir, pass_to_pass, work_dir / "p2p.xml", deadline_at)
         logs.append(f"[PASS_TO_PASS]\n{p2p_log}")
-        for outcome in p2p_outcomes.values():
+        # 以契约声明的用例为准：未被采集到（not_found）同样视为不通过，
+        # 避免漏跑用例被静默忽略；声明文件/类级 nodeid 时按前缀聚合
+        p2p_results = _resolve_declared_outcomes(pass_to_pass, p2p_outcomes)
+        for outcome in p2p_results.values():
             p2p_summary["total"] += 1
             p2p_summary[outcome] = p2p_summary.get(outcome, 0) + 1
     facts["pass_to_pass_summary"] = p2p_summary
-    facts["pass_to_pass_no_regression"] = p2p_summary["failed"] == 0 and p2p_summary["error"] == 0
+    facts["pass_to_pass_results"] = p2p_results
+    facts["pass_to_pass_no_regression"] = (
+        p2p_summary["failed"] == 0 and p2p_summary["error"] == 0 and p2p_summary["not_found"] == 0
+    )
 
     facts["verdict"] = {
         "fail_to_pass_ok": facts["fail_to_pass_all_passed"],

@@ -23,7 +23,7 @@ from pathlib import Path
 from ..config import settings
 from ..toolchain.compilers import compiler_version, ensure_cpp_compiler
 from ..toolchain.python_env import ensure_python
-from .base import VerifyOutcome, run_command, tail
+from .base import VerifyOutcome, run_command, step_timeout, tail
 from .extract import extract_code
 
 logger = logging.getLogger(__name__)
@@ -44,17 +44,19 @@ def _tokens_equal(actual: str, expected: str) -> bool:
     return actual.split() == expected.split()
 
 
-def _compile(compiler: Path, source: Path, output: Path) -> tuple[bool, str]:
+def _compile(compiler: Path, source: Path, output: Path, deadline_at: float | None = None) -> tuple[bool, str]:
     result = run_command(
         [str(compiler), "-O2", "-std=c++17", "-o", str(output), str(source)],
-        timeout_s=settings.verify_step_timeout_s,
+        timeout_s=step_timeout(deadline_at, settings.verify_step_timeout_s),
     )
     if result.returncode != 0:
         return False, tail(result.stderr or result.stdout)
     return True, ""
 
 
-def _cached_reference_binary(compiler: Path, source: Path, cache_root: Path) -> tuple[Path, str]:
+def _cached_reference_binary(
+    compiler: Path, source: Path, cache_root: Path, deadline_at: float | None = None
+) -> tuple[Path, str]:
     """编译参考解（按源码 hash 缓存）。返回 (可执行文件路径, 编译器版本)。"""
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:24]
     version = compiler_version(compiler)
@@ -62,7 +64,7 @@ def _cached_reference_binary(compiler: Path, source: Path, cache_root: Path) -> 
     binary = cache_dir / ("ref.exe" if os.name == "nt" else "ref")
     if not binary.is_file():
         cache_dir.mkdir(parents=True, exist_ok=True)
-        ok, log = _compile(compiler, source, binary)
+        ok, log = _compile(compiler, source, binary, deadline_at)
         if not ok:
             raise RuntimeError(f"参考解编译失败: {log}")
     return binary, version
@@ -72,7 +74,9 @@ _CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".c"}
 _PY_SUFFIXES = {".py"}
 
 
-def _reference_command(ref_source: Path, environment: dict) -> tuple[list[str], float]:
+def _reference_command(
+    ref_source: Path, environment: dict, deadline_at: float | None = None
+) -> tuple[list[str], float]:
     """按参考解语言返回运行命令与单用例时限。
 
     C++：编译（产物按内容 hash 缓存），时限按题目值；
@@ -82,7 +86,7 @@ def _reference_command(ref_source: Path, environment: dict) -> tuple[list[str], 
     if suffix in _CPP_SUFFIXES:
         compiler = ensure_cpp_compiler()
         environment.setdefault("cpp_compiler", compiler_version(compiler))
-        binary, _ = _cached_reference_binary(compiler, ref_source, settings.cache_dir / "refbin")
+        binary, _ = _cached_reference_binary(compiler, ref_source, settings.cache_dir / "refbin", deadline_at)
         return [str(binary)], 0.0  # 时限由调用方按题目值给定
     if suffix in _PY_SUFFIXES:
         python_path = ensure_python(settings.verifier_default_python)
@@ -97,7 +101,13 @@ def _run_solution(cmd: list[str], stdin_text: str, timeout_s: float) -> tuple[st
     return result.stdout, result.stderr, result.duration_s, result.timed_out or result.returncode != 0
 
 
-def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir: Path) -> VerifyOutcome:
+def verify_algorithm(
+    task_dir: Path,
+    verify: dict,
+    response_text: str,
+    work_dir: Path,
+    deadline_at: float | None = None,
+) -> VerifyOutcome:
     """执行竞赛判定契约，返回判定事实。"""
     started = time.perf_counter()
     evaluation = verify.get("evaluation") or {}
@@ -137,7 +147,7 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
         solver_src = work_dir / "solution.cpp"
         solver_src.write_text(code, encoding="utf-8")
         solver_bin = work_dir / ("solution.exe" if os.name == "nt" else "solution")
-        ok, log = _compile(compiler, solver_src, solver_bin)
+        ok, log = _compile(compiler, solver_src, solver_bin, deadline_at)
         facts["compiled"] = ok
         if not ok:
             facts["compile_error"] = log
@@ -159,7 +169,7 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
     ref_is_python = ref_source.suffix.lower() in _PY_SUFFIXES
     ref_limit = time_limit * (_INTERPRETED_FACTOR if ref_is_python else 1)
     try:
-        ref_cmd, _ = _reference_command(ref_source, environment)
+        ref_cmd, _ = _reference_command(ref_source, environment, deadline_at)
     except RuntimeError as exc:
         return VerifyOutcome("failed", "algorithm", facts, environment, error=str(exc))
 
@@ -167,10 +177,14 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
     tool_python = ensure_python(settings.verifier_default_python)
 
     def run_case(input_text: str) -> tuple[bool, str, str, float]:
-        expected_out, _, _, ref_bad = _run_solution(ref_cmd, input_text, ref_limit * 2)
+        expected_out, _, _, ref_bad = _run_solution(
+            ref_cmd, input_text, step_timeout(deadline_at, ref_limit * 2)
+        )
         if ref_bad:
             raise RuntimeError("参考解运行失败（数据集契约问题）")
-        actual_out, err, duration, bad = _run_solution(solver_cmd, input_text, limit)
+        actual_out, err, duration, bad = _run_solution(
+            solver_cmd, input_text, step_timeout(deadline_at, limit)
+        )
         if bad:
             return False, "", err or "超时或崩溃", duration
         return _tokens_equal(actual_out, expected_out), actual_out, "", duration
@@ -205,15 +219,21 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
         for seed in range(1, settings.algorithm_stress_seeds + 1):
             gen = run_command(
                 [str(tool_python), str(generator_path), str(seed), str(settings.algorithm_stress_cases)],
-                timeout_s=120,
+                timeout_s=step_timeout(deadline_at, 120),
             )
             if gen.returncode != 0 or not gen.stdout.strip():
                 return VerifyOutcome("failed", "algorithm", facts, environment, error=f"生成器运行失败: {tail(gen.stderr)}")
             stress_input = gen.stdout
-            expected_out, _, _, ref_bad = _run_solution(ref_cmd, stress_input, ref_limit * 2)
+            expected_out, _, _, ref_bad = _run_solution(
+                ref_cmd, stress_input, step_timeout(deadline_at, ref_limit * 2)
+            )
             if ref_bad:
                 return VerifyOutcome("failed", "algorithm", facts, environment, error="参考解运行失败（数据集契约问题）")
-            actual_out, err, duration, bad = _run_solution(solver_cmd, stress_input, limit * settings.algorithm_stress_cases)
+            actual_out, err, duration, bad = _run_solution(
+                solver_cmd,
+                stress_input,
+                step_timeout(deadline_at, limit * settings.algorithm_stress_cases),
+            )
             stress_total += 1
             ok = (not bad) and _tokens_equal(actual_out, expected_out)
             if ok:

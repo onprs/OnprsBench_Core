@@ -48,6 +48,7 @@ class MockClient:
         self._agent_cursor = 0
 
     async def complete_with_tools(self, request: ModelRequest, tools: list[dict[str, Any]]) -> ToolStep:
+        timer = CallTimer()
         await asyncio.sleep(self._latency_s)
         action = (
             self._agent_script[self._agent_cursor]
@@ -62,6 +63,7 @@ class MockClient:
             output_tokens=8,
             reasoning_tokens=0,
         )
+        finished_at, latency = timer.finish()
         if action is not None and "tool" in action:
             call = ToolCall(
                 id=f"mock-call-{self._agent_cursor}",
@@ -84,14 +86,22 @@ class MockClient:
                 },
                 usage=usage,
                 raw_response={"mock": True, "agent_action": action["tool"]},
+                finish_reason="tool_calls",
+                started_at=timer.started_at,
+                finished_at=finished_at,
+                total_latency_s=latency,
             )
-        text = str((action or {}).get("text") or "mock agent 已完成工作区修改")
+        text = str((action or {}).get("text") or self._solver_response(prompt_text))
         return ToolStep(
             content=text,
             tool_calls=[],
             assistant_message={"role": "assistant", "content": text},
             usage=usage,
             raw_response={"mock": True},
+            finish_reason="stop",
+            started_at=timer.started_at,
+            finished_at=finished_at,
+            total_latency_s=latency,
         )
 
     async def complete(self, request: ModelRequest) -> ModelResult:
