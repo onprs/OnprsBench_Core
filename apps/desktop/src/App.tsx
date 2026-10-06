@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "@/components/Layout";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { apiBase } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ComparePage } from "@/pages/ComparePage";
@@ -92,15 +93,17 @@ function KeepAlivePages() {
 
 export function App() {
   return (
-    <HashRouter>
-      <BackendGate>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Navigate to="/setup" replace />} />
-            <Route path="*" element={<KeepAlivePages />} />
-          </Route>
-        </Routes>
-      </BackendGate>
-    </HashRouter>
+    <ErrorBoundary>
+      <HashRouter>
+        <BackendGate>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Navigate to="/setup" replace />} />
+              <Route path="*" element={<KeepAlivePages />} />
+            </Route>
+          </Routes>
+        </BackendGate>
+      </HashRouter>
+    </ErrorBoundary>
   );
 }

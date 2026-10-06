@@ -132,12 +132,18 @@ export interface DatasetTask {
   id: string;
   task_id: string;
   revision: number;
+  task_hash: string;
+  title: string;
   type: string;
+  status: string;
   tags: string[];
-  domains: string[];
+  difficulty: string;
+  flagship: boolean;
   contamination: string;
   freshness: string;
+  has_verify_contract: boolean;
   problem: string;
+  rubric_dimensions: { id: string; weight: number }[];
 }
 
 export interface TargetSpecIn {

@@ -3,8 +3,10 @@ import { FileArchive, FolderOpen } from "lucide-react";
 import { api, type DatasetInstallation, type DatasetTask } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
 import { isDesktopApp, listenDirectoryDrop, pickArchiveFile, pickDirectory } from "@/lib/desktop";
+import { labelForContamination, labelForDifficulty, labelForTaskType } from "@/lib/labels";
 import { Badge } from "@/components/ui/badge";
 import { CompactList } from "@/components/CompactList";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HelpTip } from "@/components/HelpTip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -17,6 +19,7 @@ export function DatasetsPage() {
   const [installations, setInstallations] = useState<DatasetInstallation[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [tasks, setTasks] = useState<DatasetTask[]>([]);
+  const [problemTask, setProblemTask] = useState<DatasetTask | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -260,39 +263,77 @@ export function DatasetsPage() {
 
       {selected && (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>题目列表</CardTitle>
+            <Button size="sm" variant="ghost" onClick={() => setSelected(null)}>
+              收起
+            </Button>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>rev</TableHead>
-                  <TableHead>类型</TableHead>
-                  <TableHead>领域</TableHead>
-                  <TableHead>污染风险</TableHead>
-                  <TableHead>题面</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tasks.map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="font-mono text-xs">{t.task_id}</TableCell>
-                    <TableCell>{t.revision}</TableCell>
-                    <TableCell>{t.type}</TableCell>
-                    <TableCell>{t.domains.join(", ")}</TableCell>
-                    <TableCell>
-                      <Badge variant={t.contamination === "high" ? "destructive" : "outline"}>{t.contamination}</Badge>
-                    </TableCell>
-                    <TableCell className="max-w-md truncate">{t.problem}</TableCell>
+            {tasks.length === 0 ? (
+              <p className="text-sm text-muted-foreground">该数据集没有任务</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>ID</TableHead>
+                    <TableHead className="w-[56px]">rev</TableHead>
+                    <TableHead className="w-[140px]">类型</TableHead>
+                    <TableHead className="w-[200px]">标签</TableHead>
+                    <TableHead className="w-[90px]">难度</TableHead>
+                    <TableHead className="w-[100px]">污染风险</TableHead>
+                    <TableHead className="w-[100px]">程序判定</TableHead>
+                    <TableHead>题面</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {tasks.map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="whitespace-nowrap font-mono text-xs">{t.task_id}</TableCell>
+                      <TableCell>{t.revision}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{labelForTaskType(t.type)}</TableCell>
+                      <TableCell>
+                        <CompactList items={t.tags ?? []} />
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{labelForDifficulty(t.difficulty)}</TableCell>
+                      <TableCell>
+                        <Badge variant={t.contamination === "high" ? "destructive" : "outline"}>
+                          {labelForContamination(t.contamination)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={t.has_verify_contract ? "success" : "outline"}>
+                          {t.has_verify_contract ? "有契约" : "文本评审"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-md">
+                        <button
+                          type="button"
+                          className="block max-w-full truncate text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                          onClick={() => setProblemTask(t)}
+                        >
+                          {t.problem.split("\n").find((line) => line.trim()) ?? "（空题面）"}
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={problemTask !== null} onOpenChange={(open) => !open && setProblemTask(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{problemTask?.title || problemTask?.task_id}</DialogTitle>
+          </DialogHeader>
+          <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">
+            {problemTask?.problem}
+          </pre>
+        </DialogContent>
+      </Dialog>
 
       {confirmElement}
     </div>
