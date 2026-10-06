@@ -129,7 +129,7 @@ function ProvidersTab({
     }
   }
 
-  /** 点击 Provider 名称或模型列表：展示已拉取的列表（不发起拉取）。 */
+  /** 点击 Provider 条目：展示已拉取的列表（不发起拉取）。 */
   async function showCachedModels(provider: Provider) {
     setPanelOpen(true);
     if (provider.model_catalog_count === 0) {
@@ -287,7 +287,6 @@ function ProvidersTab({
                 <TableHead>名称</TableHead>
                 <TableHead>类型</TableHead>
                 <TableHead>凭据</TableHead>
-                <TableHead>模型列表</TableHead>
                 <TableHead className="w-[220px]"></TableHead>
               </TableRow>
             </TableHeader>
@@ -302,11 +301,6 @@ function ProvidersTab({
                   <TableCell className="whitespace-nowrap font-medium">{p.name}</TableCell>
                   <TableCell>{p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
-                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                    {p.model_catalog_count > 0
-                      ? `${p.model_catalog_count} 个 · ${fmtTime(p.model_catalog_fetched_at)}`
-                      : "未拉取"}
-                  </TableCell>
                   {/* 操作列阻止冒泡，避免点按钮时同时打开模型面板 */}
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <div className="flex gap-1">
