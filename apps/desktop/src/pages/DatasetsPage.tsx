@@ -8,7 +8,6 @@ import { HelpTip } from "@/components/HelpTip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -54,13 +53,17 @@ export function DatasetsPage() {
     }
   }
 
-  // 桌面应用：监听原生拖入（拖入目录即开始安装）
+  // 桌面应用：监听原生拖入（拖入后仅记录路径，由右侧按钮触发安装）
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     void listenDirectoryDrop({
       onDrop: (paths) => {
-        if (paths[0]) void install(paths[0]);
+        if (paths[0]) {
+          setPath(paths[0]);
+          setError(null);
+          setInfo(null);
+        }
       },
       onDragStateChange: setDragging,
     }).then((fn) => {
@@ -71,18 +74,16 @@ export function DatasetsPage() {
       disposed = true;
       unlisten?.();
     };
-    // install 依赖 path，但其参数优先，拖入始终使用实际路径
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, reload]);
+  }, []);
 
-  /** 点击拖入区域后选择来源：目录或压缩包。 */
+  /** 点击拖入区域后选择来源：目录或压缩包（仅填入路径）。 */
   async function pickSource(kind: "directory" | "archive") {
     setSourceMenuOpen(false);
     const selected = kind === "directory" ? await pickDirectory() : await pickArchiveFile();
-    if (selected) {
-      setPath(selected);
-      await install(selected);
-    }
+    if (!selected) return;
+    setPath(selected);
+    setError(null);
+    setInfo(null);
   }
 
   // 点击页面其他位置关闭来源菜单
@@ -133,7 +134,8 @@ export function DatasetsPage() {
               数据集目录或发布包
               <HelpTip text="支持解压后的目录，或 .tar.gz / .tgz / .tar 发布包；需包含符合 Dataset Protocol 的 manifest.yaml，安装前会做完整校验" />
             </Label>
-            <div className="relative" ref={sourceMenuRef}>
+            <div className="flex items-start gap-3">
+              <div className="relative min-w-0 flex-1" ref={sourceMenuRef}>
               <button
                 type="button"
                 onClick={() => {
@@ -163,8 +165,8 @@ export function DatasetsPage() {
                 <FolderOpen className="h-5 w-5 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">
                   {isDesktopApp()
-                    ? "将数据集目录或压缩包拖到这里，或点击这里选择（选好即自动安装）"
-                    : "桌面应用支持将数据集目录或压缩包拖到这里或点击选择；浏览器模式请填写路径"}
+                    ? "将数据集目录或压缩包拖到这里，或点击这里选择，然后点击右侧按钮安装"
+                    : "桌面应用支持将数据集目录或压缩包拖到这里或点击选择；浏览器模式不支持选择本地路径"}
                 </span>
                 {path && <span className="break-all font-mono text-xs">{path}</span>}
               </button>
@@ -188,10 +190,8 @@ export function DatasetsPage() {
                   </button>
                 </div>
               )}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="数据集目录或 .tar.gz 压缩包路径" className="font-mono" />
-              <Button onClick={() => void install()} disabled={!path}>
+              </div>
+              <Button onClick={() => void install()} disabled={!path} className="shrink-0">
                 校验并安装
               </Button>
             </div>
