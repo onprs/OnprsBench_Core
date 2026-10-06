@@ -69,7 +69,7 @@ function TargetPicker({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        {options.length === 0 && <p className="text-sm text-muted-foreground">请先在「设置」中创建 Deployment</p>}
+        {options.length === 0 && <p className="text-sm text-muted-foreground">请先在「设置」中创建部署</p>}
         {options.map((opt) => (
           <label key={opt.key} className="flex cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm">
             <Checkbox checked={selected.has(opt.key)} onCheckedChange={() => onToggle(opt.key)} />
@@ -130,7 +130,7 @@ export function NewRunPage() {
     setSubmitting(true);
     try {
       const run = await api.post<{ id: string }>("/api/runs", {
-        name: name || `Run ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+        name: name || `评测 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
         installation_id: installationId,
         suite_id: suiteId,
         solvers: toTargets(solverKeys),
@@ -153,7 +153,7 @@ export function NewRunPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-bold">新建 Run</h1>
+      <h1 className="text-xl font-bold">新建评测</h1>
 
       <Card>
         <CardHeader>
@@ -183,15 +183,15 @@ export function NewRunPage() {
             </Select>
           </div>
           <div className="space-y-1">
-            <Label>Suite</Label>
+            <Label>套件</Label>
             <Select value={suiteId} onValueChange={setSuiteId}>
               <SelectTrigger>
-                <SelectValue placeholder="选择 suite" />
+                <SelectValue placeholder="选择套件" />
               </SelectTrigger>
               <SelectContent>
                 {!selectedInstallation && <SelectEmpty>请先选择数据集</SelectEmpty>}
                 {selectedInstallation && selectedInstallation.suites.length === 0 && (
-                  <SelectEmpty>该数据集没有 suite</SelectEmpty>
+                  <SelectEmpty>该数据集没有套件</SelectEmpty>
                 )}
                 {selectedInstallation?.suites.map((s) => (
                   <SelectItem key={s.id} value={s.id} disabled={s.task_count === 0}>
@@ -201,7 +201,7 @@ export function NewRunPage() {
                 {selectedInstallation &&
                   selectedInstallation.suites.length > 0 &&
                   selectedInstallation.suites.every((s) => s.task_count === 0) && (
-                    <SelectEmpty>该数据集的 suite 暂无可运行任务</SelectEmpty>
+                    <SelectEmpty>该数据集的套件暂无可运行任务</SelectEmpty>
                   )}
               </SelectContent>
             </Select>
@@ -211,15 +211,15 @@ export function NewRunPage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <TargetPicker
-          title="Solver"
-          tip="被评测的 Evaluation Target（Deployment × Reasoning Profile），可多选"
+          title="解答者"
+          tip="被评测的评测目标（部署 × 推理配置），可多选"
           options={options}
           selected={solverKeys}
           onToggle={(k) => toggle(solverKeys, k, setSolverKeys)}
         />
         <TargetPicker
-          title="Judge"
-          tip="评分者，并行运行；输入中对 Solver 身份匿名化"
+          title="评分者"
+          tip="评分者，并行运行；输入中对解答者身份匿名化"
           options={options}
           selected={judgeKeys}
           onToggle={(k) => toggle(judgeKeys, k, setJudgeKeys)}
@@ -228,7 +228,7 @@ export function NewRunPage() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
       <Button size="lg" onClick={submit} disabled={!canSubmit}>
-        {submitting ? "创建中…" : "开始运行"}
+        {submitting ? "创建中…" : "开始评测"}
       </Button>
     </div>
   );

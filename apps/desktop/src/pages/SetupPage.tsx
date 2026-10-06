@@ -19,6 +19,13 @@ function ErrorText({ error }: { error: string | null }) {
   return <p className="text-sm text-destructive">{error}</p>;
 }
 
+/** 从渠道模型列表选用模型时，填入部署创建表单的草稿。 */
+export interface DeploymentDraft {
+  providerId: string;
+  modelId: string;
+  apiModelName: string;
+}
+
 export function SetupPage() {
   const [providerTypes, setProviderTypes] = useState<ProviderType[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -26,6 +33,8 @@ export function SetupPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<ReasoningProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState("providers");
+  const [deploymentDraft, setDeploymentDraft] = useState<DeploymentDraft | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -54,21 +63,32 @@ export function SetupPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-bold">设置</h1>
       <ErrorText error={error} />
-      <Tabs defaultValue="providers">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="providers">Provider</TabsTrigger>
-          <TabsTrigger value="deployments">Deployment</TabsTrigger>
+          <TabsTrigger value="providers">渠道</TabsTrigger>
+          <TabsTrigger value="deployments">部署</TabsTrigger>
         </TabsList>
-        <TabsContent value="providers">
-          <ProvidersTab providerTypes={providerTypes} providers={providers} deployments={deployments} onChanged={reload} />
+        <TabsContent value="providers" forceMount className="data-[state=inactive]:hidden">
+          <ProvidersTab
+            providerTypes={providerTypes}
+            providers={providers}
+            deployments={deployments}
+            onChanged={reload}
+            onUseModel={(draft) => {
+              setDeploymentDraft(draft);
+              setTab("deployments");
+            }}
+          />
         </TabsContent>
-        <TabsContent value="deployments">
+        <TabsContent value="deployments" forceMount className="data-[state=inactive]:hidden">
           <DeploymentsTab
             providers={providers}
             models={models}
             deployments={deployments}
             profiles={profiles}
             onChanged={reload}
+            draft={deploymentDraft}
+            onDraftApplied={() => setDeploymentDraft(null)}
           />
         </TabsContent>
       </Tabs>
@@ -85,11 +105,13 @@ function ProvidersTab({
   providers,
   deployments,
   onChanged,
+  onUseModel,
 }: {
   providerTypes: ProviderType[];
   providers: Provider[];
   deployments: Deployment[];
   onChanged: () => Promise<void>;
+  onUseModel: (draft: DeploymentDraft) => void;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("mock");
@@ -200,7 +222,7 @@ function ProvidersTab({
 
   async function deleteProvider(provider: Provider) {
     if (!(await confirm({
-      title: "删除 Provider？",
+      title: "删除渠道？",
       description: `「${provider.name}」的 API Key 会一并从系统安全存储移除。`,
       confirmText: "删除",
     }))) return;
@@ -213,19 +235,19 @@ function ProvidersTab({
     }
   }
 
-  async function addDeploymentFromRemote(provider: Provider, apiModelName: string) {
-    // 自动创建 canonical Model（幂等）并创建 Deployment
-    const model = await api.post<ModelInfo>("/api/models", {
-      canonical_id: apiModelName,
-      display_name: apiModelName,
-    });
-    await api.post("/api/deployments", {
-      name: `${apiModelName} · ${provider.name}`,
-      model_id: model.id,
-      provider_id: provider.id,
-      api_model_name: apiModelName,
-    });
-    await onChanged();
+  async function useRemoteModel(provider: Provider, apiModelName: string) {
+    // 仅确保 canonical Model 存在，并填入部署创建表单；由用户确认后创建部署
+    setListError(null);
+    try {
+      const model = await api.post<ModelInfo>("/api/models", {
+        canonical_id: apiModelName,
+        display_name: apiModelName,
+      });
+      await onChanged();
+      onUseModel({ providerId: provider.id, modelId: model.id, apiModelName });
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -233,7 +255,7 @@ function ProvidersTab({
       <div className="grid min-w-0 flex-1 gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle>添加 Provider</CardTitle>
+          <CardTitle>添加渠道</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1">
@@ -256,7 +278,7 @@ function ProvidersTab({
             </Select>
           </div>
           <div className="space-y-1">
-            <Label>Base URL{selectedType?.base_url ? `（默认 ${selectedType.base_url}）` : ""}</Label>
+            <Label>接口地址{selectedType?.base_url ? `（默认 ${selectedType.base_url}）` : ""}</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="可选" />
           </div>
           {type !== "mock" && (
@@ -277,7 +299,7 @@ function ProvidersTab({
 
       <Card>
         <CardHeader>
-          <CardTitle>已有 Provider</CardTitle>
+          <CardTitle>已有渠道</CardTitle>
         </CardHeader>
         <CardContent>
           <ErrorText error={listError} />
@@ -299,7 +321,7 @@ function ProvidersTab({
                   onClick={() => void showCachedModels(p)}
                 >
                   <TableCell className="whitespace-nowrap font-medium">{p.name}</TableCell>
-                  <TableCell>{p.type}</TableCell>
+                  <TableCell>{providerTypes.find((t) => t.type === p.type)?.label ?? p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
                   {/* 操作列阻止冒泡，避免点按钮时同时打开模型面板 */}
                   <TableCell onClick={(e) => e.stopPropagation()}>
@@ -354,7 +376,7 @@ function ProvidersTab({
             <CardHeader className="space-y-0 pr-10">
               <CardTitle className="flex items-center gap-1.5 text-base">
                 {modelsPanel?.provider.name} 的可用模型
-                <HelpTip text="选择一个模型创建 Deployment（同时自动建立 canonical Model）" />
+                <HelpTip text="选择模型后填入部署创建表单，由你确认后创建" />
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -391,11 +413,11 @@ function ProvidersTab({
               )}
               {modelsPanel?.source === "empty" && !modelsPanel.error && (
                 <p className="text-sm text-muted-foreground">
-                  尚未拉取模型。点击右侧「拉取模型」获取该 Provider 的可用模型列表。
+                  尚未拉取模型。点击右侧「拉取模型」获取该渠道的可用模型列表。
                 </p>
               )}
               {modelsPanel?.models && modelsPanel.models.length === 0 && modelsPanel.source !== "empty" && (
-                <p className="text-sm text-muted-foreground">该 Provider 未返回任何模型</p>
+                <p className="text-sm text-muted-foreground">该渠道未返回任何模型</p>
               )}
               {modelsPanel?.models && modelsPanel.models.length > 0 && (
                 <div className="max-h-[60vh] space-y-1 overflow-auto">
@@ -410,9 +432,9 @@ function ProvidersTab({
                           size="sm"
                           variant="outline"
                           disabled={added}
-                          onClick={() => addDeploymentFromRemote(modelsPanel.provider, m)}
+                          onClick={() => void useRemoteModel(modelsPanel.provider, m)}
                         >
-                          {added ? "已添加" : "添加"}
+                          {added ? "已有部署" : "选择"}
                         </Button>
                       </div>
                     );
@@ -469,7 +491,7 @@ function ProviderEditDialog({
     <Dialog open={provider !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>编辑 Provider</DialogTitle>
+          <DialogTitle>编辑渠道</DialogTitle>
           <DialogDescription>凭据状态：{provider?.has_credential ? "已保存 API Key" : "未设置 API Key"}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -478,7 +500,7 @@ function ProviderEditDialog({
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="space-y-1">
-            <Label>Base URL</Label>
+            <Label>接口地址</Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="可选" />
           </div>
           {provider?.type !== "mock" && (
@@ -533,12 +555,16 @@ function DeploymentsTab({
   deployments,
   profiles,
   onChanged,
+  draft,
+  onDraftApplied,
 }: {
   providers: Provider[];
   models: ModelInfo[];
   deployments: Deployment[];
   profiles: ReasoningProfile[];
   onChanged: () => Promise<void>;
+  draft: DeploymentDraft | null;
+  onDraftApplied: () => void;
 }) {
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState("");
@@ -548,6 +574,7 @@ function DeploymentsTab({
   const [priceOut, setPriceOut] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [draftHint, setDraftHint] = useState<string | null>(null);
 
   const [profileFor, setProfileFor] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("");
@@ -558,6 +585,17 @@ function DeploymentsTab({
   const [profileTemp, setProfileTemp] = useState("");
   const [editing, setEditing] = useState<Deployment | null>(null);
   const { confirm, confirmElement } = useConfirm();
+
+  // 从渠道模型列表选用时预填表单，由用户确认后创建
+  useEffect(() => {
+    if (!draft) return;
+    setName(`${draft.apiModelName} · `);
+    setModelId(draft.modelId);
+    setProviderId(draft.providerId);
+    setApiModelName(draft.apiModelName);
+    setDraftHint(`已填入「${draft.apiModelName}」，确认后点击创建部署`);
+    onDraftApplied();
+  }, [draft, onDraftApplied]);
 
   async function createDeployment() {
     setError(null);
@@ -574,6 +612,7 @@ function DeploymentsTab({
       setApiModelName("");
       setPriceIn("");
       setPriceOut("");
+      setDraftHint(null);
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -582,8 +621,8 @@ function DeploymentsTab({
 
   async function deleteDeployment(d: Deployment) {
     const ok = await confirm({
-      title: "删除 Deployment？",
-      description: `「${d.name}」及其未被历史使用的 Reasoning Profile 将被删除。`,
+      title: "删除部署？",
+      description: `「${d.name}」及其未被历史使用的推理配置将被删除。`,
       confirmText: "删除",
     });
     if (!ok) return;
@@ -598,7 +637,7 @@ function DeploymentsTab({
 
   async function deleteProfile(p: ReasoningProfile) {
     const ok = await confirm({
-      title: "删除 Reasoning Profile？",
+      title: "删除推理配置？",
       description: `「${p.name}」将被删除。`,
       confirmText: "删除",
     });
@@ -642,9 +681,10 @@ function DeploymentsTab({
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>手动创建 Deployment</CardTitle>
+          <CardTitle>手动创建部署</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 lg:grid-cols-3">
+          {draftHint && <p className="text-sm text-primary lg:col-span-3">{draftHint}</p>}
           <div className="space-y-1">
             <Label>名称</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Kimi K3 · Official" />
@@ -656,7 +696,7 @@ function DeploymentsTab({
                 <SelectValue placeholder="选择模型" />
               </SelectTrigger>
               <SelectContent>
-                {models.length === 0 && <SelectEmpty>暂无模型（可在 Provider 页拉取模型后创建）</SelectEmpty>}
+                {models.length === 0 && <SelectEmpty>暂无模型（可在渠道页拉取模型后创建）</SelectEmpty>}
                 {models.map((m) => (
                   <SelectItem key={m.id} value={m.id}>
                     {m.display_name}
@@ -666,13 +706,13 @@ function DeploymentsTab({
             </Select>
           </div>
           <div className="space-y-1">
-            <Label>Provider</Label>
+            <Label>渠道</Label>
             <Select value={providerId} onValueChange={setProviderId}>
               <SelectTrigger>
                 <SelectValue placeholder="选择渠道" />
               </SelectTrigger>
               <SelectContent>
-                {providers.length === 0 && <SelectEmpty>暂无渠道（请先在 Provider 页添加）</SelectEmpty>}
+                {providers.length === 0 && <SelectEmpty>暂无渠道（请先在渠道页添加）</SelectEmpty>}
                 {providers.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}（{p.type}）
@@ -688,21 +728,21 @@ function DeploymentsTab({
           <div className="space-y-1">
             <Label>
               输入价（$/M tokens）
-              <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+              <HelpTip text="手动价格设置，优先级高于 models.dev 与 LiteLLM 价格目录" />
             </Label>
             <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="可选" />
           </div>
           <div className="space-y-1">
             <Label>
               输出价（$/M tokens）
-              <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+              <HelpTip text="手动价格设置，优先级高于 models.dev 与 LiteLLM 价格目录" />
             </Label>
             <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
           </div>
           <div className="lg:col-span-3">
             <ErrorText error={error} />
             <Button onClick={createDeployment} disabled={!name || !modelId || !providerId || !apiModelName}>
-              创建 Deployment
+              创建部署
             </Button>
           </div>
         </CardContent>
@@ -710,7 +750,7 @@ function DeploymentsTab({
 
       <Card>
         <CardHeader>
-          <CardTitle>Deployment 列表</CardTitle>
+          <CardTitle>部署列表</CardTitle>
         </CardHeader>
         <CardContent>
           <ErrorText error={listError} />
@@ -718,10 +758,10 @@ function DeploymentsTab({
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>Provider</TableHead>
+                <TableHead>模型</TableHead>
+                <TableHead>渠道</TableHead>
                 <TableHead>API 模型名</TableHead>
-                <TableHead>Reasoning Profiles</TableHead>
+                <TableHead>推理配置</TableHead>
                 <TableHead>创建时间</TableHead>
                 <TableHead className="w-[190px]"></TableHead>
               </TableRow>
@@ -777,8 +817,8 @@ function DeploymentsTab({
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-1.5">
-              新建 Reasoning Profile
-              <HelpTip text="同一 Deployment 的不同思考强度是独立的评测配置" />
+              新建推理配置
+              <HelpTip text="同一部署的不同思考强度是独立的评测配置" />
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
@@ -794,7 +834,7 @@ function DeploymentsTab({
               <div className="space-y-1">
                 <Label className="flex items-center gap-1">
                   思考预算（token）
-                  <HelpTip text="仅部分 Provider 支持；留空表示不指定" />
+                  <HelpTip text="仅部分渠道支持；留空表示不指定" />
                 </Label>
                 <Input value={profileBudget} onChange={(e) => setProfileBudget(e.target.value)} placeholder="留空 = 不指定" />
               </div>
@@ -877,7 +917,7 @@ function DeploymentEditDialog({
     <Dialog open={deployment !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>编辑 Deployment</DialogTitle>
+          <DialogTitle>编辑部署</DialogTitle>
           <DialogDescription>{deployment?.model_display_name} · {deployment?.provider_name}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -890,21 +930,21 @@ function DeploymentEditDialog({
             <Input value={apiModelName} onChange={(e) => setApiModelName(e.target.value)} />
           </div>
           <div className="space-y-1">
-            <Label>Endpoint override</Label>
+            <Label>接口地址覆盖</Label>
             <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="可选" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label>
                 输入价（$/M tokens）
-                <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+                <HelpTip text="手动价格设置，优先级高于 models.dev 与 LiteLLM 价格目录" />
               </Label>
               <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="可选" />
             </div>
             <div className="space-y-1">
               <Label>
                 输出价（$/M tokens）
-                <HelpTip text="手动价格 override，优先级高于 models.dev 与 LiteLLM 价格目录" />
+                <HelpTip text="手动价格设置，优先级高于 models.dev 与 LiteLLM 价格目录" />
               </Label>
               <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
             </div>

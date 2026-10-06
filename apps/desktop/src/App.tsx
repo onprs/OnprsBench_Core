@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Layout } from "@/components/Layout";
 import { apiBase } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { ComparePage } from "@/pages/ComparePage";
 import { DatasetsPage } from "@/pages/DatasetsPage";
 import { HistoryPage } from "@/pages/HistoryPage";
@@ -45,6 +46,50 @@ function BackendGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** 根据路径渲染对应页面（已访问页面由 KeepAlivePages 缓存挂载）。 */
+function renderPage(pathname: string) {
+  if (pathname.startsWith("/runs/") && pathname !== "/runs/new") {
+    return <RunDetailPage runId={pathname.split("/")[2]} />;
+  }
+  switch (pathname) {
+    case "/setup":
+      return <SetupPage />;
+    case "/datasets":
+      return <DatasetsPage />;
+    case "/runs/new":
+      return <NewRunPage />;
+    case "/history":
+      return <HistoryPage />;
+    case "/compare":
+      return <ComparePage />;
+    default:
+      return <Navigate to="/setup" replace />;
+  }
+}
+
+/** 页面缓存：切换导航时保留表单、选择与滚动位置（已访问页面隐藏而非卸载）。 */
+function KeepAlivePages() {
+  const { pathname } = useLocation();
+  const [visited, setVisited] = useState<string[]>(() => [pathname]);
+
+  useEffect(() => {
+    setVisited((prev) => (prev.includes(pathname) ? prev : [...prev, pathname]));
+  }, [pathname]);
+
+  return (
+    <>
+      {visited.map((path) => (
+        <div
+          key={path}
+          className={cn("min-h-0 flex-1 overflow-auto p-6", path !== pathname && "hidden")}
+        >
+          {renderPage(path)}
+        </div>
+      ))}
+    </>
+  );
+}
+
 export function App() {
   return (
     <HashRouter>
@@ -52,12 +97,7 @@ export function App() {
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Navigate to="/setup" replace />} />
-            <Route path="/setup" element={<SetupPage />} />
-            <Route path="/datasets" element={<DatasetsPage />} />
-            <Route path="/runs/new" element={<NewRunPage />} />
-            <Route path="/runs/:runId" element={<RunDetailPage />} />
-            <Route path="/history" element={<HistoryPage />} />
-            <Route path="/compare" element={<ComparePage />} />
+            <Route path="*" element={<KeepAlivePages />} />
           </Route>
         </Routes>
       </BackendGate>

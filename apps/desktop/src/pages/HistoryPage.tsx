@@ -58,8 +58,8 @@ export function HistoryPage() {
           </span>
         ),
       }),
-      columnHelper.accessor("solver_execution_count", { header: "Solver" }),
-      columnHelper.accessor("judge_execution_count", { header: "Judge" }),
+      columnHelper.accessor("solver_execution_count", { header: "解答者" }),
+      columnHelper.accessor("judge_execution_count", { header: "评分者" }),
       columnHelper.accessor("total_cost", { header: "总成本", cell: (c) => fmtCost(c.getValue()) }),
       columnHelper.accessor("total_wall_time_s", { header: "总耗时", cell: (c) => fmtSeconds(c.getValue()) }),
       columnHelper.accessor("created_at", { header: "创建时间", cell: (c) => fmtTime(c.getValue()) }),
@@ -124,13 +124,13 @@ export function HistoryPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-1.5">
-            Score over Time
-            <HelpTip text="同一 Evaluation Target 跨 Run 的得分变化，用于发现能力漂移" />
+            得分趋势
+            <HelpTip text="同一评测目标跨多次评测的得分变化，用于发现能力漂移" />
           </CardTitle>
         </CardHeader>
         <CardContent>
           {points.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无已完成的 Run</p>
+            <p className="text-sm text-muted-foreground">暂无已完成的评测</p>
           ) : (
             <EChart option={timeseriesOption} height={320} />
           )}
@@ -140,7 +140,7 @@ export function HistoryPage() {
       {points.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Cost / Latency over Time</CardTitle>
+            <CardTitle>成本 / 延迟趋势</CardTitle>
           </CardHeader>
           <CardContent>
             <EChart option={costLatencyOption} height={440} />
@@ -150,7 +150,7 @@ export function HistoryPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>全部 Run</CardTitle>
+          <CardTitle>全部评测</CardTitle>
         </CardHeader>
         <CardContent>
           <Table>

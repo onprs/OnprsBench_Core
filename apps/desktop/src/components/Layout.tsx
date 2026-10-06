@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 const NAV_ITEMS = [
   { to: "/setup", label: "设置" },
   { to: "/datasets", label: "数据集" },
-  { to: "/runs/new", label: "新建 Run" },
+  { to: "/runs/new", label: "新建评测" },
   { to: "/history", label: "历史" },
   { to: "/compare", label: "对比" },
 ];
@@ -51,7 +51,7 @@ export function Layout() {
             </button>
           </div>
         </aside>
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex min-h-0 flex-1 flex-col">
           <Outlet />
         </main>
       </div>

@@ -175,7 +175,7 @@ export function DatasetsPage() {
                 <TableHead>形态</TableHead>
                 <TableHead>修订</TableHead>
                 <TableHead>协议</TableHead>
-                <TableHead>Suites</TableHead>
+                <TableHead>套件</TableHead>
                 <TableHead>安装时间</TableHead>
                 <TableHead></TableHead>
               </TableRow>

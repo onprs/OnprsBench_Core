@@ -19,8 +19,9 @@ const STATUS_BADGE: Record<string, { label: string; variant: "secondary" | "succ
 
 const targetColumnHelper = createColumnHelper<TargetSummary>();
 
-export function RunDetailPage() {
-  const { runId } = useParams<{ runId: string }>();
+export function RunDetailPage({ runId: runIdProp }: { runId?: string } = {}) {
+  const { runId: runIdParam } = useParams<{ runId: string }>();
+  const runId = runIdProp ?? runIdParam;
   const [run, setRun] = useState<Run | null>(null);
   const [results, setResults] = useState<RunResults | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,13 +52,13 @@ export function RunDetailPage() {
 
   const targetColumns = useMemo(
     () => [
-      targetColumnHelper.accessor("label", { header: "Evaluation Target" }),
+      targetColumnHelper.accessor("label", { header: "评测目标" }),
       targetColumnHelper.accessor((r) => `${r.completed_count}/${r.task_count}`, { id: "progress", header: "完成" }),
       targetColumnHelper.accessor("score_mean", {
         header: "平均分",
         cell: (c) => <span className="font-semibold">{fmtScore(c.getValue())}</span>,
       }),
-      targetColumnHelper.accessor("total_cost", { header: "Solver 成本", cell: (c) => fmtCost(c.getValue()) }),
+      targetColumnHelper.accessor("total_cost", { header: "解答成本", cell: (c) => fmtCost(c.getValue()) }),
       targetColumnHelper.accessor("latency_mean_s", { header: "平均延迟", cell: (c) => fmtSeconds(c.getValue()) }),
       targetColumnHelper.accessor("turns_mean", {
         header: "花费轮次",
@@ -92,7 +93,7 @@ export function RunDetailPage() {
           return `${d.name}<br/>成本: ${fmtCost(d.value[0])}<br/>得分: ${fmtScore(d.value[1])}`;
         },
       },
-      xAxis: { type: "value" as const, name: "Solver 成本 ($)", scale: true },
+      xAxis: { type: "value" as const, name: "解答成本 ($)", scale: true },
       yAxis: { type: "value" as const, name: "平均分", max: 100 },
       series: [
         {
@@ -142,7 +143,7 @@ export function RunDetailPage() {
         <div>
           <h1 className="text-xl font-bold">{run.name}</h1>
           <p className="text-xs text-muted-foreground">
-            {run.dataset_id} v{run.dataset_version}（{run.dataset_revision}）· suite {run.suite_id} · framework{" "}
+            {run.dataset_id} v{run.dataset_version}（{run.dataset_revision}）· 套件 {run.suite_id} · 框架{" "}
             {run.framework_version}@{run.framework_commit.slice(0, 8)}
           </p>
         </div>
@@ -162,15 +163,15 @@ export function RunDetailPage() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard title="总成本" value={fmtCost(run.total_cost)} sub={`solver ${fmtCost(run.solver_cost)} + judge ${fmtCost(run.judge_cost)}`} />
         <StatCard title="总耗时" value={fmtSeconds(run.total_wall_time_s)} sub={`solver ${fmtSeconds(run.solver_wall_time_s)} + 判定 ${fmtSeconds(run.verifier_wall_time_s)} + judge ${fmtSeconds(run.judge_wall_time_s)}`} />
-        <StatCard title="Solver 执行" value={String(run.solver_execution_count)} sub={`共 ${turnsTotal} 轮${truncatedTotal ? ` · 截断 ${truncatedTotal}` : ""}`} />
-        <StatCard title="Judge 执行" value={String(run.judge_execution_count)} sub={`manifest ${run.manifest_hash.slice(0, 12)}…`} />
+        <StatCard title="解答执行" value={String(run.solver_execution_count)} sub={`共 ${turnsTotal} 轮${truncatedTotal ? ` · 截断 ${truncatedTotal}` : ""}`} />
+        <StatCard title="评分执行" value={String(run.judge_execution_count)} sub={`清单 ${run.manifest_hash.slice(0, 12)}…`} />
       </div>
 
       {run.error && <p className="text-sm text-destructive">{run.error}</p>}
 
       <Card>
         <CardHeader>
-          <CardTitle>Evaluation Target 汇总</CardTitle>
+          <CardTitle>评测目标汇总</CardTitle>
         </CardHeader>
         <CardContent>
           <Table>
@@ -256,7 +257,7 @@ function TaskEntryCard({ entry, expanded, onToggle }: { entry: TaskEntry; expand
         <span className="font-mono text-xs">{entry.task_id}</span>
         <Badge variant={entry.status === "completed" ? "success" : "destructive"}>{entry.status}</Badge>
         {entry.truncated && <Badge variant="warning">输出截断</Badge>}
-        {summary.high_disagreement && <Badge variant="warning">Judge 分歧大</Badge>}
+        {summary.high_disagreement && <Badge variant="warning">评分分歧大</Badge>}
         <span className="ml-auto text-muted-foreground">
           轮次 {entry.turns ?? "—"} · 均分 {fmtScore(summary.mean)} · σ {summary.stddev !== null ? summary.stddev.toFixed(1) : "—"} · 延迟{" "}
           {fmtSeconds(entry.total_latency_s)} · {fmtCost(entry.cost)}
@@ -280,13 +281,13 @@ function TaskEntryCard({ entry, expanded, onToggle }: { entry: TaskEntry; expand
           {entry.error && <p className="text-sm text-destructive">{entry.error}</p>}
           {entry.response_text && (
             <div>
-              <div className="mb-1 text-xs font-medium text-muted-foreground">Solver 回答</div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">解答者回答</div>
               <pre className="whitespace-pre-wrap rounded bg-muted p-3 text-xs">{entry.response_text}</pre>
             </div>
           )}
           {entry.judges.length > 0 && (
             <div>
-              <div className="mb-1 text-xs font-medium text-muted-foreground">Judge 评分（{entry.judges.length}）</div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">评分者评分（{entry.judges.length}）</div>
               <div className="space-y-1">
                 {entry.judges.map((j) => (
                   <div key={j.judge_execution_id} className="flex flex-wrap items-center gap-2 rounded bg-muted/50 px-3 py-1.5 text-xs">

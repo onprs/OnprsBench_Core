@@ -98,7 +98,7 @@ export function ComparePage() {
         },
       },
       legend: { type: "scroll" as const, top: 0 },
-      xAxis: { type: "log" as const, name: "Solver 成本 ($)" },
+      xAxis: { type: "log" as const, name: "解答成本 ($)" },
       yAxis: { type: "value" as const, name: "平均分", max: 100 },
       series: [
         ...[...byKey.entries()].map(([name, data]) => ({
@@ -132,12 +132,12 @@ export function ComparePage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-1.5">
-            选择要对比的 Run
-            <HelpTip text="跨 Run 比较前会判定可比性：数据集版本、修订、task revision、框架版本须一致" />
+            选择要对比的评测
+            <HelpTip text="跨评测比较前会判定可比性：数据集版本、修订、任务修订、框架版本须一致" />
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          {runs.length === 0 && <p className="text-sm text-muted-foreground">暂无已完成的 Run</p>}
+          {runs.length === 0 && <p className="text-sm text-muted-foreground">暂无已完成的评测</p>}
           {runs.map((run) => (
             <label key={run.id} className="flex cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm">
               <Checkbox
@@ -190,7 +190,7 @@ export function ComparePage() {
         <>
           <Card>
             <CardHeader>
-              <CardTitle>Score vs Cost（含 Pareto 前沿）</CardTitle>
+              <CardTitle>得分 vs 成本（含 Pareto 前沿）</CardTitle>
             </CardHeader>
             <CardContent>
               <EChart option={scatterOption} height={380} />
@@ -205,10 +205,10 @@ export function ComparePage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Run</TableHead>
-                    <TableHead>Evaluation Target</TableHead>
+                    <TableHead>评测</TableHead>
+                    <TableHead>评测目标</TableHead>
                     <TableHead>平均分</TableHead>
-                    <TableHead>Solver 成本</TableHead>
+                    <TableHead>解答成本</TableHead>
                     <TableHead>平均延迟</TableHead>
                     <TableHead>花费轮次</TableHead>
                     <TableHead>时间</TableHead>
