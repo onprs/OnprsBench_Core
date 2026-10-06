@@ -33,7 +33,11 @@ export function SetupPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<ReasoningProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState("providers");
+  const [tab, setTab] = useState(() =>
+    typeof window !== "undefined" && window.location.hash.includes("tab=deployments")
+      ? "deployments"
+      : "providers"
+  );
   const [deploymentDraft, setDeploymentDraft] = useState<DeploymentDraft | null>(null);
 
   const reload = useCallback(async () => {
@@ -252,12 +256,12 @@ function ProvidersTab({
 
   return (
     <div className="flex items-start gap-4">
-      <div className="grid min-w-0 flex-1 gap-4 lg:grid-cols-2">
+      <div className="min-w-0 flex-1 space-y-4">
       <Card>
         <CardHeader>
           <CardTitle>添加渠道</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-1">
             <Label>名称</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：OpenAI 官方" />
@@ -278,7 +282,10 @@ function ProvidersTab({
             </Select>
           </div>
           <div className="space-y-1">
-            <Label>接口地址{selectedType?.base_url ? `（默认 ${selectedType.base_url}）` : ""}</Label>
+            <Label>
+              接口地址
+              {selectedType?.base_url && <HelpTip text={`默认 ${selectedType.base_url}`} />}
+            </Label>
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="可选" />
           </div>
           {type !== "mock" && (
@@ -290,10 +297,12 @@ function ProvidersTab({
               <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
           )}
-          <ErrorText error={error} />
-          <Button onClick={createProvider} disabled={!name}>
-            创建
-          </Button>
+          <div className="sm:col-span-2 xl:col-span-3">
+            <ErrorText error={error} />
+            <Button onClick={createProvider} disabled={!name}>
+              创建
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -307,9 +316,9 @@ function ProvidersTab({
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
-                <TableHead>类型</TableHead>
-                <TableHead>凭据</TableHead>
-                <TableHead className="w-[220px]"></TableHead>
+                <TableHead className="w-[120px]">类型</TableHead>
+                <TableHead className="w-[96px]">凭据</TableHead>
+                <TableHead className="w-[248px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -321,11 +330,11 @@ function ProvidersTab({
                   onClick={() => void showCachedModels(p)}
                 >
                   <TableCell className="whitespace-nowrap font-medium">{p.name}</TableCell>
-                  <TableCell>{providerTypes.find((t) => t.type === p.type)?.label ?? p.type}</TableCell>
+                  <TableCell className="whitespace-nowrap text-muted-foreground">{providerTypes.find((t) => t.type === p.type)?.label ?? p.type}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.has_credential ? <Badge variant="success">已保存</Badge> : <Badge variant="outline">未设置</Badge>}</TableCell>
                   {/* 操作列阻止冒泡，避免点按钮时同时打开模型面板 */}
                   <TableCell onClick={(e) => e.stopPropagation()}>
-                    <div className="flex gap-1">
+                    <div className="flex justify-end gap-1">
                       <Button
                         size="sm"
                         variant="outline"
@@ -690,7 +699,7 @@ function DeploymentsTab({
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Kimi K3 · Official" />
           </div>
           <div className="space-y-1">
-            <Label>Model</Label>
+            <Label>模型</Label>
             <Select value={modelId} onValueChange={setModelId}>
               <SelectTrigger>
                 <SelectValue placeholder="选择模型" />
@@ -754,25 +763,25 @@ function DeploymentsTab({
         </CardHeader>
         <CardContent>
           <ErrorText error={listError} />
-          <Table>
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>模型</TableHead>
-                <TableHead>渠道</TableHead>
-                <TableHead>API 模型名</TableHead>
-                <TableHead>推理配置</TableHead>
-                <TableHead>创建时间</TableHead>
-                <TableHead className="w-[190px]"></TableHead>
+                <TableHead className="w-[21%]">名称</TableHead>
+                <TableHead className="w-[12.5%]">模型</TableHead>
+                <TableHead className="w-[12.5%]">渠道</TableHead>
+                <TableHead className="w-[12%]">API 模型名</TableHead>
+                <TableHead className="w-[8%]">推理配置</TableHead>
+                <TableHead className="w-[140px]">创建时间</TableHead>
+                <TableHead className="w-[248px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {deployments.map((d) => (
                 <TableRow key={d.id}>
-                  <TableCell className="font-medium">{d.name}</TableCell>
-                  <TableCell>{d.model_display_name}</TableCell>
-                  <TableCell>{d.provider_name}</TableCell>
-                  <TableCell className="font-mono text-xs">{d.api_model_name}</TableCell>
+                  <TableCell className="break-words font-medium">{d.name}</TableCell>
+                  <TableCell className="break-words">{d.model_display_name}</TableCell>
+                  <TableCell className="break-words">{d.provider_name}</TableCell>
+                  <TableCell className="break-words font-mono text-xs">{d.api_model_name}</TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {profiles
@@ -784,7 +793,7 @@ function DeploymentsTab({
                               type="button"
                               className="opacity-60 hover:opacity-100"
                               onClick={() => deleteProfile(p)}
-                              title="删除该 profile"
+                              title="删除该推理配置"
                             >
                               <X className="h-3 w-3" />
                             </button>
@@ -794,9 +803,9 @@ function DeploymentsTab({
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{fmtTime(d.created_at)}</TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
+                    <div className="flex justify-end gap-1">
                       <Button size="sm" variant="outline" onClick={() => setProfileFor(d.id)}>
-                        + Profile
+                        + 推理配置
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => setEditing(d)}>
                         编辑

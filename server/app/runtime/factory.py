@@ -17,7 +17,7 @@ PROVIDER_TYPE_DEFAULTS: dict[str, dict] = {
     "deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com", "needs_key": True},
     "openai_compatible": {"label": "OpenAI 兼容", "base_url": None, "needs_key": False},
     "ollama": {"label": "Ollama", "base_url": "http://localhost:11434", "needs_key": False},
-    "mock": {"label": "Mock（离线演示/测试）", "base_url": None, "needs_key": False},
+    "mock": {"label": "Mock（离线）", "base_url": None, "needs_key": False},
 }
 
 
