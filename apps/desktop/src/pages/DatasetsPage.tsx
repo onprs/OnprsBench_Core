@@ -140,10 +140,10 @@ export function DatasetsPage() {
     <div className="flex h-full min-h-0 flex-col gap-3">
       <h1 className="shrink-0 text-xl font-bold">数据集</h1>
 
-      {/* 题目列表：点击查看后展开，位于安装板块上方，展开时把下方板块推下去 */}
+      {/* 题目列表：点击查看后展开。视觉顺序由 order 控制：安装（顶部）→ 题目列表 → 已安装 */}
       <div
         className={cn(
-          "shrink-0 overflow-hidden transition-all duration-300 ease-out",
+          "order-2 shrink-0 overflow-hidden transition-all duration-300 ease-out",
           selected ? "max-h-[380px] opacity-100" : "max-h-0 opacity-0"
         )}
       >
@@ -213,7 +213,7 @@ export function DatasetsPage() {
         )}
       </div>
 
-      <Card className="shrink-0">
+      <Card className="order-1 shrink-0">
         <CardHeader>
           <CardTitle>安装本地数据集</CardTitle>
         </CardHeader>
@@ -290,7 +290,7 @@ export function DatasetsPage() {
         </CardContent>
       </Card>
 
-      <Card className="flex min-h-[176px] flex-1 flex-col">
+      <Card className="order-3 flex min-h-[176px] flex-1 flex-col">
         <CardHeader className="shrink-0">
           <CardTitle>已安装</CardTitle>
         </CardHeader>
