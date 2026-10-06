@@ -158,7 +158,7 @@ export function DatasetsPage() {
             </div>
           </div>
           {error && <p className="whitespace-pre-wrap text-sm text-destructive">{error}</p>}
-          {info && <p className="text-sm text-emerald-400">{info}</p>}
+          {info && <p className="text-sm text-emerald-600 dark:text-emerald-400">{info}</p>}
         </CardContent>
       </Card>
 

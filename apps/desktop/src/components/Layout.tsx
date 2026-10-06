@@ -1,5 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { Moon, Sun } from "lucide-react";
 import { AppTitleBar } from "@/components/AppTitleBar";
+import { toggleTheme, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -11,6 +13,8 @@ const NAV_ITEMS = [
 ];
 
 export function Layout() {
+  const theme = useTheme();
+
   return (
     <div className="flex h-screen flex-col">
       <AppTitleBar />
@@ -36,6 +40,16 @@ export function Layout() {
               </NavLink>
             ))}
           </nav>
+          <div className="border-t p-2">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+              onClick={() => toggleTheme()}
+            >
+              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {theme === "dark" ? "浅色模式" : "深色模式"}
+            </button>
+          </div>
         </aside>
         <main className="flex-1 overflow-auto p-6">
           <Outlet />

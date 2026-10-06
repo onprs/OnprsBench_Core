@@ -12,6 +12,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 
+[target.'cfg(windows)'.dependencies]
+# 缩放窗口时同步 DWM 边框色（Windows 11），避免露出与主题不符的边框
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
