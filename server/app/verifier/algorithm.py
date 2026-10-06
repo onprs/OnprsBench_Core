@@ -68,6 +68,29 @@ def _cached_reference_binary(compiler: Path, source: Path, cache_root: Path) -> 
     return binary, version
 
 
+_CPP_SUFFIXES = {".cpp", ".cc", ".cxx", ".c"}
+_PY_SUFFIXES = {".py"}
+
+
+def _reference_command(ref_source: Path, environment: dict) -> tuple[list[str], float]:
+    """按参考解语言返回运行命令与单用例时限。
+
+    C++：编译（产物按内容 hash 缓存），时限按题目值；
+    Python：直接解释运行，时限 ×3（与 solver 侧一致的框架约定）。
+    """
+    suffix = ref_source.suffix.lower()
+    if suffix in _CPP_SUFFIXES:
+        compiler = ensure_cpp_compiler()
+        environment.setdefault("cpp_compiler", compiler_version(compiler))
+        binary, _ = _cached_reference_binary(compiler, ref_source, settings.cache_dir / "refbin")
+        return [str(binary)], 0.0  # 时限由调用方按题目值给定
+    if suffix in _PY_SUFFIXES:
+        python_path = ensure_python(settings.verifier_default_python)
+        environment.setdefault("reference_python", str(python_path))
+        return [str(python_path), str(ref_source)], 0.0
+    raise RuntimeError(f"不支持的参考解类型: {ref_source.name}")
+
+
 def _run_solution(cmd: list[str], stdin_text: str, timeout_s: float) -> tuple[str, str, float, bool]:
     """运行解答程序。返回 (stdout, stderr, 耗时, 是否超时)。"""
     result = run_command(cmd, timeout_s=timeout_s, stdin_text=stdin_text)
@@ -129,14 +152,14 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
         solver_cmd = [str(python_path), str(solver_py)]
         facts["compiled"] = True
 
-    # 2. 参考解（期望输出来源，编译缓存）
-    compiler = ensure_cpp_compiler()
-    environment.setdefault("cpp_compiler", compiler_version(compiler))
+    # 2. 参考解（期望输出来源；C++ 编译并缓存，Python 直接解释运行）
     ref_source = task_dir / str(reference_rel)
     if not ref_source.is_file():
         return VerifyOutcome("failed", "algorithm", facts, environment, error=f"参考解缺失: {reference_rel}")
+    ref_is_python = ref_source.suffix.lower() in _PY_SUFFIXES
+    ref_limit = time_limit * (_INTERPRETED_FACTOR if ref_is_python else 1)
     try:
-        ref_bin, _ = _cached_reference_binary(compiler, ref_source, settings.cache_dir / "refbin")
+        ref_cmd, _ = _reference_command(ref_source, environment)
     except RuntimeError as exc:
         return VerifyOutcome("failed", "algorithm", facts, environment, error=str(exc))
 
@@ -144,7 +167,7 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
     tool_python = ensure_python(settings.verifier_default_python)
 
     def run_case(input_text: str) -> tuple[bool, str, str, float]:
-        expected_out, _, _, ref_bad = _run_solution([str(ref_bin)], input_text, time_limit * 2)
+        expected_out, _, _, ref_bad = _run_solution(ref_cmd, input_text, ref_limit * 2)
         if ref_bad:
             raise RuntimeError("参考解运行失败（数据集契约问题）")
         actual_out, err, duration, bad = _run_solution(solver_cmd, input_text, limit)
@@ -187,7 +210,7 @@ def verify_algorithm(task_dir: Path, verify: dict, response_text: str, work_dir:
             if gen.returncode != 0 or not gen.stdout.strip():
                 return VerifyOutcome("failed", "algorithm", facts, environment, error=f"生成器运行失败: {tail(gen.stderr)}")
             stress_input = gen.stdout
-            expected_out, _, _, ref_bad = _run_solution([str(ref_bin)], stress_input, time_limit * 2)
+            expected_out, _, _, ref_bad = _run_solution(ref_cmd, stress_input, ref_limit * 2)
             if ref_bad:
                 return VerifyOutcome("failed", "algorithm", facts, environment, error="参考解运行失败（数据集契约问题）")
             actual_out, err, duration, bad = _run_solution(solver_cmd, stress_input, limit * settings.algorithm_stress_cases)

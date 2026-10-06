@@ -15,12 +15,13 @@ from .uv_tool import ensure_uv
 logger = logging.getLogger(__name__)
 
 
-def _run(args: list[str], *, cwd: Path | None = None, timeout_s: float = 600.0) -> subprocess.CompletedProcess:
+def _run(args: list[str], *, cwd: Path | None = None, timeout_s: float = 600.0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     logger.debug("执行: %s (cwd=%s)", " ".join(str(a) for a in args), cwd)
     try:
         return subprocess.run(
             [str(a) for a in args],
             cwd=cwd,
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout_s,
@@ -78,25 +79,34 @@ def venv_python(venv_dir: Path) -> Path:
 
 
 def create_venv(python_path: Path, venv_dir: Path) -> Path:
-    """在 venv_dir 创建虚拟环境，返回 venv 内 python 路径。"""
-    uv = ensure_uv()
-    result = _run([uv, "venv", "--python", str(python_path), str(venv_dir)])
+    """在 venv_dir 创建虚拟环境，返回 venv 内 python 路径。已存在则幂等复用。"""
     py = venv_python(venv_dir)
+    if py.is_file():
+        return py
+    uv = ensure_uv()
+    result = _run([uv, "venv", "--python", str(python_path), str(venv_dir.resolve())])
     if result.returncode != 0 or not py.is_file():
         raise ToolchainUnavailable(f"创建 venv 失败: {result.stderr.strip()[:300]}")
     return py
 
 
 def pip_install(venv_py: Path, args: list[str], *, cwd: Path | None = None) -> None:
-    """向 venv 安装依赖（经 uv，利用其全局缓存加速重复安装）。"""
+    """向 venv 安装依赖（经 uv，利用其全局缓存加速重复安装）。
+
+    SETUPTOOLS_SCM_PRETEND_VERSION：归档快照不含 .git 元数据，使用
+    setuptools-scm / hatch-vcs 推导版本的包必须靠该环境变量完成构建；
+    判定语义不依赖版本号，统一占位为 1.0.0。
+    """
     uv = ensure_uv()
     env = os.environ.copy()
     # uv pip 需要知道目标环境
     env["VIRTUAL_ENV"] = str(venv_py.parent.parent)
+    env.setdefault("SETUPTOOLS_SCM_PRETEND_VERSION", "1.0.0")
     result = _run(
-        [uv, "pip", "install", "--python", str(venv_py), *args],
+        [uv, "pip", "install", "--python", str(venv_py.resolve()), *args],
         cwd=cwd,
         timeout_s=settings.verify_step_timeout_s,
+        env=env,
     )
     if result.returncode != 0:
         raise ToolchainUnavailable(f"依赖安装失败（{' '.join(args)}）: {result.stderr.strip()[:300]}")

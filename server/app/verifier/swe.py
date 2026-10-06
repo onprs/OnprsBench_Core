@@ -71,8 +71,32 @@ def _run_setup_steps(venv_py: Path, repo_dir: Path, steps: list[str]) -> tuple[b
     return True, "\n".join(logs)
 
 
+def _junit_nodeid(classname: str, name: str) -> str:
+    """把 JUnit 的 classname/name 还原为 pytest nodeid。
+
+    classname 形如 "tests.test_utils"（模块级测试）或 "tests.test_x.TestFoo"（类内测试）；
+    模块路径按惯例全小写，第一个大写开头的段起为类名。参数化后缀（[param]）保留在 name 中。
+    """
+    parts = classname.split(".") if classname else []
+    split_at = len(parts)
+    for i, part in enumerate(parts):
+        if part[:1].isupper():
+            split_at = i
+            break
+    module_path = "/".join(parts[:split_at])
+    classes = parts[split_at:]
+    nodeid = f"{module_path}.py" if module_path else ""
+    for cls in classes:
+        nodeid += f"::{cls}"
+    return f"{nodeid}::{name}" if nodeid else name
+
+
 def _parse_junit(report: Path) -> dict[str, str]:
-    """解析 pytest JUnit XML，返回 {nodeid: passed/failed/error/skipped}。"""
+    """解析 pytest JUnit XML，返回 {nodeid: passed/failed/error/skipped}。
+
+    参数化用例的 nodeid 形如 test_x[param]；契约声明的裸 nodeid
+    （test_x.py::test_y）应聚合其全部参数化实例：全过才 passed，
+    任一失败/错误即 failed/error。"""
     outcomes: dict[str, str] = {}
     if not report.is_file():
         return outcomes
@@ -81,9 +105,7 @@ def _parse_junit(report: Path) -> dict[str, str]:
     except ET.ParseError:
         return outcomes
     for case in tree.getroot().iter("testcase"):
-        classname = case.get("classname", "").replace(".", "/")
-        name = case.get("name", "")
-        nodeid = f"{classname}.py::{name}" if classname else name
+        nodeid = _junit_nodeid(case.get("classname", ""), case.get("name", ""))
         if case.find("failure") is not None:
             outcomes[nodeid] = "failed"
         elif case.find("error") is not None:
@@ -92,7 +114,16 @@ def _parse_junit(report: Path) -> dict[str, str]:
             outcomes[nodeid] = "skipped"
         else:
             outcomes[nodeid] = "passed"
-    return outcomes
+    # 聚合参数化实例到其裸 nodeid（取最差结果）
+    severity = {"passed": 0, "skipped": 1, "failed": 2, "error": 3}
+    aggregated = dict(outcomes)
+    for nodeid, outcome in outcomes.items():
+        base = nodeid.split("[")[0] if "[" in nodeid else None
+        if base:
+            prev = aggregated.get(base)
+            if prev is None or severity[outcome] > severity[prev]:
+                aggregated[base] = outcome
+    return aggregated
 
 
 def _run_pytest(venv_py: Path, repo_dir: Path, targets: list[str], report: Path) -> tuple[dict[str, str], str]:
@@ -117,6 +148,7 @@ def _run_pytest(venv_py: Path, repo_dir: Path, targets: list[str], report: Path)
 def verify_swe(task_dir: Path, verify: dict, response_text: str, work_dir: Path) -> VerifyOutcome:
     """执行 SWE 判定契约，返回判定事实。"""
     started = time.perf_counter()
+    work_dir = work_dir.resolve()  # uv 等子进程对相对路径的解析依赖 cwd，统一绝对化
     repo_url = verify.get("repo_url") or f"https://github.com/{verify.get('repo', '')}"
     base_commit = verify.get("base_commit")
     evaluation = verify.get("evaluation") or {}
