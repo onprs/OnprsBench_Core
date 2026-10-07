@@ -12,6 +12,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectEmpty, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CompactList } from "@/components/CompactList";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { labelForPriceSource } from "@/lib/labels";
 
@@ -542,6 +543,120 @@ function numberOrNull(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** 推理配置表单草稿（输入框值以字符串保存，提交时转换）。 */
+interface ProfileDraft {
+  name: string;
+  effort: string;
+  budget: string;
+  maxTokens: string;
+  maxTurns: string;
+  temperature: string;
+}
+
+const EMPTY_PROFILE_DRAFT: ProfileDraft = {
+  name: "",
+  effort: "",
+  budget: "",
+  maxTokens: "",
+  maxTurns: "",
+  temperature: "",
+};
+
+function draftToProfilePayload(draft: ProfileDraft) {
+  return {
+    name: draft.name.trim() || "默认",
+    reasoning_effort: draft.effort.trim() || null,
+    reasoning_budget: numberOrNull(draft.budget),
+    max_output_tokens: numberOrNull(draft.maxTokens),
+    agent_max_turns: draft.maxTurns.trim() === "" ? null : numberOrNull(draft.maxTurns),
+    temperature: numberOrNull(draft.temperature),
+  };
+}
+
+function draftFromProfile(profile: ReasoningProfile): ProfileDraft {
+  return {
+    name: profile.name,
+    effort: profile.reasoning_effort ?? "",
+    budget: profile.reasoning_budget !== null ? String(profile.reasoning_budget) : "",
+    maxTokens: profile.max_output_tokens !== null ? String(profile.max_output_tokens) : "",
+    maxTurns: profile.agent_max_turns !== null ? String(profile.agent_max_turns) : "",
+    temperature: profile.temperature !== null ? String(profile.temperature) : "",
+  };
+}
+
+/** 推理配置字段（创建部署与编辑对话框共用）。 */
+function ProfileFields({
+  draft,
+  onChange,
+  capabilities,
+}: {
+  draft: ProfileDraft;
+  onChange: (patch: Partial<ProfileDraft>) => void;
+  capabilities: PricingPreviewCapabilities | null;
+}) {
+  const reasoningSupported = capabilities?.reasoning !== false;
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <div className="space-y-1 sm:col-span-2">
+        <Label className="flex h-5 items-center gap-1">配置名称</Label>
+        <Input
+          value={draft.name}
+          onChange={(e) => onChange({ name: e.target.value })}
+          placeholder="默认"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="flex h-5 items-center gap-1">
+          思考程度
+          {!reasoningSupported && <HelpTip text="该模型未声明推理能力，此处设置可能被忽略" />}
+        </Label>
+        <Input
+          value={draft.effort}
+          onChange={(e) => onChange({ effort: e.target.value })}
+          placeholder="low / medium / high / max"
+          disabled={!reasoningSupported}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="flex h-5 items-center gap-1">思考预算（token）</Label>
+        <Input
+          value={draft.budget}
+          onChange={(e) => onChange({ budget: e.target.value })}
+          placeholder="留空 = 不指定"
+          disabled={!reasoningSupported}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="flex h-5 items-center gap-1">
+          最大输出 token
+          {capabilities?.output_limit ? <HelpTip text={`该模型声明上限 ${capabilities.output_limit}`} /> : null}
+        </Label>
+        <Input
+          value={draft.maxTokens}
+          onChange={(e) => onChange({ maxTokens: e.target.value })}
+          placeholder="留空 = 不限制"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="flex h-5 items-center gap-1">最大执行轮次</Label>
+        <Input
+          value={draft.maxTurns}
+          onChange={(e) => onChange({ maxTurns: e.target.value })}
+          placeholder="留空 = 默认，0 = 不限制"
+        />
+      </div>
+      <div className="space-y-1">
+        <Label className="flex h-5 items-center gap-1">采样温度</Label>
+        <Input
+          value={draft.temperature}
+          onChange={(e) => onChange({ temperature: e.target.value })}
+          placeholder="留空 = 不指定"
+        />
+      </div>
+    </div>
+  );
+}
+
 /** Reasoning Profile 关键参数摘要（列表悬浮提示） */
 function describeProfile(profile: ReasoningProfile): string {
   const parts: string[] = [];
@@ -585,20 +700,13 @@ function DeploymentsTab({
   const [endpointOverride, setEndpointOverride] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
   const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [profileDraft, setProfileDraft] = useState<ProfileDraft>(EMPTY_PROFILE_DRAFT);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [priceSource, setPriceSource] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<PricingPreviewCapabilities | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
 
-  const [profileFor, setProfileFor] = useState<string | null>(null);
-  const [profileCapabilities, setProfileCapabilities] = useState<PricingPreviewCapabilities | null>(null);
-  const [profileName, setProfileName] = useState("");
-  const [profileEffort, setProfileEffort] = useState("");
-  const [profileBudget, setProfileBudget] = useState("");
-  const [profileMaxTokens, setProfileMaxTokens] = useState("");
-  const [profileMaxTurns, setProfileMaxTurns] = useState("");
-  const [profileTemp, setProfileTemp] = useState("");
   const [editing, setEditing] = useState<Deployment | null>(null);
   const { confirm, confirmElement } = useConfirm();
 
@@ -675,26 +783,10 @@ function DeploymentsTab({
     }
   }
 
-  /** 打开推理配置对话框，并查询该部署模型的推理能力（用于调整可选项）。 */
-  async function openProfileDialog(deploymentId: string) {
-    setProfileFor(deploymentId);
-    setProfileCapabilities(null);
-    const deployment = deployments.find((d) => d.id === deploymentId);
-    if (!deployment) return;
-    try {
-      const preview = await api.get<PricingPreview>(
-        `/api/pricing/preview?provider_id=${encodeURIComponent(deployment.provider_id)}&api_model_name=${encodeURIComponent(deployment.api_model_name)}`
-      );
-      setProfileCapabilities(preview.capabilities);
-    } catch {
-      // 能力查询失败时不做限制
-    }
-  }
-
   async function createDeployment() {
     setError(null);
     try {
-      await api.post("/api/deployments", {
+      const deployment = await api.post<{ id: string }>("/api/deployments", {
         name,
         model_id: modelId,
         provider_id: providerId,
@@ -705,6 +797,16 @@ function DeploymentsTab({
         price_cached_input_per_mtok: numberOrNull(priceCachedIn),
         price_cache_write_per_mtok: numberOrNull(priceCachedWrite),
       });
+      // 填写了推理配置时随部署一并创建
+      const profileTouched =
+        profileDraft.name.trim() !== "" ||
+        Object.entries(profileDraft).some(([key, value]) => key !== "name" && value.trim() !== "");
+      if (profileTouched) {
+        await api.post("/api/reasoning-profiles", {
+          deployment_id: deployment.id,
+          ...draftToProfilePayload(profileDraft),
+        });
+      }
       setName("");
       setApiModelName("");
       setModelId("");
@@ -715,6 +817,7 @@ function DeploymentsTab({
       setEndpointOverride("");
       setPriceSource(null);
       setCapabilities(null);
+      setProfileDraft(EMPTY_PROFILE_DRAFT);
       setMoreOpen(false);
       await onChanged();
     } catch (e) {
@@ -735,48 +838,6 @@ function DeploymentsTab({
       await onChanged();
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function deleteProfile(p: ReasoningProfile) {
-    const ok = await confirm({
-      title: "删除推理配置？",
-      description: `「${p.name}」将被删除。`,
-      confirmText: "删除",
-    });
-    if (!ok) return;
-    setListError(null);
-    try {
-      await api.delete(`/api/reasoning-profiles/${p.id}`);
-      await onChanged();
-    } catch (e) {
-      setListError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function createProfile() {
-    if (!profileFor) return;
-    setError(null);
-    try {
-      await api.post("/api/reasoning-profiles", {
-        deployment_id: profileFor,
-        name: profileName,
-        reasoning_effort: profileEffort.trim() || null,
-        reasoning_budget: numberOrNull(profileBudget),
-        max_output_tokens: numberOrNull(profileMaxTokens),
-        agent_max_turns: profileMaxTurns.trim() === "" ? null : numberOrNull(profileMaxTurns),
-        temperature: numberOrNull(profileTemp),
-      });
-      setProfileFor(null);
-      setProfileName("");
-      setProfileEffort("");
-      setProfileBudget("");
-      setProfileMaxTokens("");
-      setProfileMaxTurns("");
-      setProfileTemp("");
-      await onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -884,6 +945,17 @@ function DeploymentsTab({
                   <Label className="flex h-5 items-center gap-1">接口地址覆盖</Label>
                   <Input value={endpointOverride} onChange={(e) => setEndpointOverride(e.target.value)} placeholder="可选，覆盖渠道默认地址" />
                 </div>
+                <div className="space-y-3 rounded-md border bg-muted/20 p-3 lg:col-span-2">
+                  <div className="flex items-center gap-1.5 text-sm font-medium">
+                    推理配置
+                    <HelpTip text="填写任意一项即随部署一并创建一份推理配置；全部留空则只创建部署" />
+                  </div>
+                  <ProfileFields
+                    draft={profileDraft}
+                    onChange={(patch) => setProfileDraft((current) => ({ ...current, ...patch }))}
+                    capabilities={capabilities}
+                  />
+                </div>
                 {(priceSource !== null || capabilities !== null) && (
                   <p className="text-xs text-muted-foreground lg:col-span-2">
                     {priceSource === "unknown"
@@ -927,35 +999,21 @@ function DeploymentsTab({
             <TableBody>
               {deployments.map((d) => (
                 <TableRow key={d.id}>
-                  <TableCell className="break-words font-medium">{d.name}</TableCell>
-                  <TableCell className="break-words">{d.model_display_name}</TableCell>
-                  <TableCell className="break-words">{d.provider_name}</TableCell>
-                  <TableCell className="break-words font-mono text-xs">{d.api_model_name}</TableCell>
+                  <TableCell className="truncate font-medium" title={d.name}>{d.name}</TableCell>
+                  <TableCell className="truncate" title={d.model_display_name ?? ""}>{d.model_display_name}</TableCell>
+                  <TableCell className="truncate" title={d.provider_name ?? ""}>{d.provider_name}</TableCell>
+                  <TableCell className="truncate font-mono text-xs" title={d.api_model_name}>{d.api_model_name}</TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {profiles
+                    <CompactList
+                      items={profiles
                         .filter((p) => p.deployment_id === d.id)
-                        .map((p) => (
-                          <Badge key={p.id} variant="secondary" className="gap-1" title={describeProfile(p)}>
-                            {p.name}
-                            <button
-                              type="button"
-                              className="opacity-60 hover:opacity-100"
-                              onClick={() => deleteProfile(p)}
-                              title="删除该推理配置"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </Badge>
-                        ))}
-                    </div>
+                        .map((p) => `${p.name} · ${describeProfile(p)}`)}
+                      emptyText="未配置"
+                    />
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{fmtTime(d.created_at)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(d.created_at)}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="outline" onClick={() => void openProfileDialog(d.id)}>
-                        + 推理配置
-                      </Button>
                       <Button size="sm" variant="outline" onClick={() => setEditing(d)}>
                         编辑
                       </Button>
@@ -971,73 +1029,12 @@ function DeploymentsTab({
         </CardContent>
       </Card>
 
-      <Dialog open={profileFor !== null} onOpenChange={(open) => !open && setProfileFor(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-1.5">
-              新建推理配置
-              <HelpTip text="同一部署的不同思考强度是独立的评测配置" />
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label>名称</Label>
-              <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="low / medium / high" />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1">
-                  思考程度
-                  {profileCapabilities?.reasoning === false && (
-                    <HelpTip text="该模型未声明推理能力，此处设置可能被忽略" />
-                  )}
-                </Label>
-                <Input
-                  value={profileEffort}
-                  onChange={(e) => setProfileEffort(e.target.value)}
-                  placeholder="low / medium / high / max"
-                  disabled={profileCapabilities?.reasoning === false}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1">
-                  思考预算（token）
-                  <HelpTip text="仅部分渠道支持；留空表示不指定" />
-                </Label>
-                <Input
-                  value={profileBudget}
-                  onChange={(e) => setProfileBudget(e.target.value)}
-                  placeholder="留空 = 不指定"
-                  disabled={profileCapabilities?.reasoning === false}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1">
-                  最大输出 token
-                  <HelpTip text="思考型模型的思考与回答共享该预算；留空表示不限制" />
-                </Label>
-                <Input value={profileMaxTokens} onChange={(e) => setProfileMaxTokens(e.target.value)} placeholder="留空 = 不限制" />
-              </div>
-              <div className="space-y-1">
-                <Label className="flex items-center gap-1">
-                  最大执行轮次
-                  <HelpTip text="Agent 在任务中最多执行多少轮工具调用；留空使用默认上限，填 0 表示不限制" />
-                </Label>
-                <Input value={profileMaxTurns} onChange={(e) => setProfileMaxTurns(e.target.value)} placeholder="留空 = 默认，0 = 不限制" />
-              </div>
-              <div className="space-y-1">
-                <Label>采样温度</Label>
-                <Input value={profileTemp} onChange={(e) => setProfileTemp(e.target.value)} placeholder="留空 = 不指定" />
-              </div>
-            </div>
-            <Button onClick={createProfile} disabled={!profileName}>
-              创建
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <DeploymentEditDialog deployment={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
+      <DeploymentEditDialog
+        deployment={editing}
+        profiles={profiles.filter((p) => p.deployment_id === editing?.id)}
+        onClose={() => setEditing(null)}
+        onSaved={onChanged}
+      />
       {confirmElement}
     </div>
   );
@@ -1045,10 +1042,12 @@ function DeploymentsTab({
 
 function DeploymentEditDialog({
   deployment,
+  profiles,
   onClose,
   onSaved,
 }: {
   deployment: Deployment | null;
+  profiles: ReasoningProfile[];
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -1058,6 +1057,10 @@ function DeploymentEditDialog({
   const [priceIn, setPriceIn] = useState("");
   const [priceOut, setPriceOut] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<PricingPreviewCapabilities | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, ProfileDraft>>({});
+  const [newDraft, setNewDraft] = useState<ProfileDraft | null>(null);
+  const { confirm, confirmElement } = useConfirm();
 
   useEffect(() => {
     setName(deployment?.name ?? "");
@@ -1066,6 +1069,28 @@ function DeploymentEditDialog({
     setPriceIn(deployment?.price_input_per_mtok?.toString() ?? "");
     setPriceOut(deployment?.price_output_per_mtok?.toString() ?? "");
     setError(null);
+  }, [deployment]);
+
+  // 推理配置草稿：打开对话框时按当前 profile 初始化
+  useEffect(() => {
+    setDrafts(Object.fromEntries(profiles.map((p) => [p.id, draftFromProfile(p)])));
+    setNewDraft(null);
+  }, [profiles]);
+
+  // 该部署模型的推理能力（用于调整可选项）
+  useEffect(() => {
+    if (!deployment) return;
+    setCapabilities(null);
+    void (async () => {
+      try {
+        const preview = await api.get<PricingPreview>(
+          `/api/pricing/preview?provider_id=${encodeURIComponent(deployment.provider_id)}&api_model_name=${encodeURIComponent(deployment.api_model_name)}`
+        );
+        setCapabilities(preview.capabilities);
+      } catch {
+        // 能力查询失败时不做限制
+      }
+    })();
   }, [deployment]);
 
   async function save() {
@@ -1086,9 +1111,52 @@ function DeploymentEditDialog({
     }
   }
 
+  async function saveProfile(profileId: string) {
+    const draft = drafts[profileId];
+    if (!draft) return;
+    setError(null);
+    try {
+      await api.patch(`/api/reasoning-profiles/${profileId}`, draftToProfilePayload(draft));
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function removeProfile(profileId: string) {
+    const ok = await confirm({
+      title: "删除推理配置？",
+      description: "删除后该配置不再可用于新的评测；历史 Run 已冻结的配置快照不受影响。",
+      confirmText: "删除",
+    });
+    if (!ok) return;
+    setError(null);
+    try {
+      await api.delete(`/api/reasoning-profiles/${profileId}`);
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function createProfileInDialog() {
+    if (!deployment || !newDraft) return;
+    setError(null);
+    try {
+      await api.post("/api/reasoning-profiles", {
+        deployment_id: deployment.id,
+        ...draftToProfilePayload(newDraft),
+      });
+      setNewDraft(null);
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
     <Dialog open={deployment !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>编辑部署</DialogTitle>
           <DialogDescription>{deployment?.model_display_name} · {deployment?.provider_name}</DialogDescription>
@@ -1122,11 +1190,70 @@ function DeploymentEditDialog({
               <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
             </div>
           </div>
+          <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                推理配置
+                <HelpTip text="同一部署可以有多份推理配置，作为不同的评测目标；历史 Run 的配置快照不受修改影响" />
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setNewDraft(newDraft ? null : EMPTY_PROFILE_DRAFT)}
+                disabled={newDraft !== null}
+              >
+                + 添加配置
+              </Button>
+            </div>
+            {profiles.length === 0 && newDraft === null && (
+              <p className="text-xs text-muted-foreground">该部署暂无推理配置</p>
+            )}
+            {profiles.map((profile) => {
+              const draft = drafts[profile.id] ?? draftFromProfile(profile);
+              return (
+                <div key={profile.id} className="space-y-3 rounded-md border bg-background p-3">
+                  <ProfileFields
+                    draft={draft}
+                    onChange={(patch) =>
+                      setDrafts((current) => ({ ...current, [profile.id]: { ...draft, ...patch } }))
+                    }
+                    capabilities={capabilities}
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="destructive" onClick={() => void removeProfile(profile.id)}>
+                      删除
+                    </Button>
+                    <Button size="sm" onClick={() => void saveProfile(profile.id)}>
+                      保存配置
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {newDraft && (
+              <div className="space-y-3 rounded-md border border-dashed bg-background p-3">
+                <ProfileFields
+                  draft={newDraft}
+                  onChange={(patch) => setNewDraft((current) => (current ? { ...current, ...patch } : current))}
+                  capabilities={capabilities}
+                />
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setNewDraft(null)}>
+                    取消
+                  </Button>
+                  <Button size="sm" onClick={() => void createProfileInDialog()}>
+                    添加
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
           <ErrorText error={error} />
           <Button onClick={save} disabled={!name || !apiModelName}>
             保存
           </Button>
         </div>
+        {confirmElement}
       </DialogContent>
     </Dialog>
   );

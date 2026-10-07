@@ -70,6 +70,18 @@ class ReasoningProfileCreate(BaseModel):
     agent_max_turns: int | None = None
 
 
+class ReasoningProfileUpdate(BaseModel):
+    name: str | None = None
+    reasoning_effort: str | None = None
+    reasoning_budget: int | None = None
+    max_output_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    seed: int | None = None
+    provider_params: dict | None = None
+    agent_max_turns: int | None = None
+
+
 class DatasetInstall(BaseModel):
     path: str = Field(min_length=1)
 

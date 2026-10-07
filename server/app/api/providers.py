@@ -27,6 +27,7 @@ from ..schemas import (
     ProviderCreate,
     ProviderUpdate,
     ReasoningProfileCreate,
+    ReasoningProfileUpdate,
 )
 from ..services import credentials
 from ..services import pricing
@@ -389,6 +390,21 @@ def create_reasoning_profile(body: ReasoningProfileCreate, db: Session = Depends
     profile = ReasoningProfile(**body.model_dump())
     db.add(profile)
     db.commit()
+    return profile_dict(profile)
+
+
+@router.patch("/reasoning-profiles/{profile_id}")
+def update_reasoning_profile(
+    profile_id: str, body: ReasoningProfileUpdate, db: Session = Depends(get_db)
+) -> dict:
+    """更新推理配置；历史 Run 已冻结配置快照，不受本次修改影响。"""
+    profile = db.get(ReasoningProfile, profile_id)
+    if profile is None:
+        raise HTTPException(404, "推理配置不存在")
+    for field_name, value in body.model_dump(exclude_unset=True).items():
+        setattr(profile, field_name, value)
+    db.commit()
+    db.refresh(profile)
     return profile_dict(profile)
 
 
