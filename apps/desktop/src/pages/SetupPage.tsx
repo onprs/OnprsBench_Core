@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, ChevronDown, X } from "lucide-react";
+import { Loader2, Check, ChevronDown, X } from "lucide-react";
 import { api, type Deployment, type ModelInfo, type PricingPreview, type PricingPreviewCapabilities, type Provider, type ProviderType, type ReasoningProfile } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -437,10 +437,17 @@ function ProvidersTab({
                         </span>
                         <Button
                           size="sm"
-                          variant={isSelected ? "secondary" : "outline"}
+                          variant={isSelected ? "outline" : "default"}
                           onClick={() => void toggleModel(modelsPanel.provider.id, m)}
                         >
-                          {isSelected ? "取消选择" : "选择"}
+                          {isSelected ? (
+                            <>
+                              <Check className="mr-1 h-3.5 w-3.5" />
+                              取消选择
+                            </>
+                          ) : (
+                            "选择"
+                          )}
                         </Button>
                       </div>
                     );
