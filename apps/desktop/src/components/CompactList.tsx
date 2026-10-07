@@ -3,6 +3,8 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   items: string[];
+  /** 卡片内展示的详情（与 items 一一对应，缺省时回退到 items 本身） */
+  details?: string[];
   /** 无内容时的占位文本 */
   emptyText?: string;
   className?: string;
@@ -15,7 +17,7 @@ interface Props {
  * - 点击固定住卡片，再次点击或点击外部收起。
  * 避免多枚徽标平铺撑高表格行。
  */
-export function CompactList({ items, emptyText = "—", className }: Props) {
+export function CompactList({ items, details, emptyText = "—", className }: Props) {
   const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
   const [pinned, setPinned] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -118,9 +120,9 @@ export function CompactList({ items, emptyText = "—", className }: Props) {
           className="fixed z-50 min-w-[160px] max-w-[360px] rounded-md border bg-popover p-1.5 text-xs shadow-md"
           style={{ left: anchor.left, top: anchor.top }}
         >
-          {items.map((item) => (
+          {items.map((item, index) => (
             <div key={item} className="break-words px-1.5 py-0.5">
-              {item}
+              {details?.[index] ?? item}
             </div>
           ))}
         </div>

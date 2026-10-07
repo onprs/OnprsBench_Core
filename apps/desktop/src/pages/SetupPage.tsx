@@ -914,7 +914,7 @@ function DeploymentsTab({
             <div
               className={cn(
                 "overflow-hidden transition-all duration-300",
-                moreOpen ? "max-h-[520px] opacity-100" : "max-h-0 opacity-0"
+                moreOpen ? "max-h-[900px] opacity-100" : "max-h-0 opacity-0"
               )}
             >
               <div className="grid gap-3 border-t p-3 lg:grid-cols-2">
@@ -1005,7 +1005,8 @@ function DeploymentsTab({
                   <TableCell className="truncate font-mono text-xs" title={d.api_model_name}>{d.api_model_name}</TableCell>
                   <TableCell>
                     <CompactList
-                      items={profiles
+                      items={profiles.filter((p) => p.deployment_id === d.id).map((p) => p.name)}
+                      details={profiles
                         .filter((p) => p.deployment_id === d.id)
                         .map((p) => `${p.name} · ${describeProfile(p)}`)}
                       emptyText="未配置"
