@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
-import { api, type Deployment, type ModelInfo, type Provider, type ProviderType, type ReasoningProfile } from "@/lib/api";
+import { Loader2, ChevronDown, X } from "lucide-react";
+import { api, type Deployment, type ModelInfo, type PricingPreview, type PricingPreviewCapabilities, type Provider, type ProviderType, type ReasoningProfile } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Select, SelectContent, SelectEmpty, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { labelForPriceSource } from "@/lib/labels";
 
 function ErrorText({ error }: { error: string | null }) {
   if (!error) return null;
@@ -29,7 +30,6 @@ export interface DeploymentDraft {
 export function SetupPage() {
   const [providerTypes, setProviderTypes] = useState<ProviderType[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<ReasoningProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -39,19 +39,16 @@ export function SetupPage() {
       : "providers"
   );
   const [deploymentDraft, setDeploymentDraft] = useState<DeploymentDraft | null>(null);
-
   const reload = useCallback(async () => {
     try {
-      const [types, provs, mods, deps, profs] = await Promise.all([
+      const [types, provs, deps, profs] = await Promise.all([
         api.get<{ types: ProviderType[] }>("/api/provider-types"),
         api.get<Provider[]>("/api/providers"),
-        api.get<ModelInfo[]>("/api/models"),
         api.get<Deployment[]>("/api/deployments"),
         api.get<ReasoningProfile[]>("/api/reasoning-profiles"),
       ]);
       setProviderTypes(types.types);
       setProviders(provs);
-      setModels(mods);
       setDeployments(deps);
       setProfiles(profs);
     } catch (e) {
@@ -87,7 +84,7 @@ export function SetupPage() {
         <TabsContent value="deployments" forceMount className="data-[state=inactive]:hidden">
           <DeploymentsTab
             providers={providers}
-            models={models}
+            providerTypes={providerTypes}
             deployments={deployments}
             profiles={profiles}
             onChanged={reload}
@@ -558,7 +555,7 @@ function describeProfile(profile: ReasoningProfile): string {
 
 function DeploymentsTab({
   providers,
-  models,
+  providerTypes,
   deployments,
   profiles,
   onChanged,
@@ -566,7 +563,7 @@ function DeploymentsTab({
   onDraftApplied,
 }: {
   providers: Provider[];
-  models: ModelInfo[];
+  providerTypes: ProviderType[];
   deployments: Deployment[];
   profiles: ReasoningProfile[];
   onChanged: () => Promise<void>;
@@ -579,11 +576,19 @@ function DeploymentsTab({
   const [apiModelName, setApiModelName] = useState("");
   const [priceIn, setPriceIn] = useState("");
   const [priceOut, setPriceOut] = useState("");
+  const [priceCachedIn, setPriceCachedIn] = useState("");  const [priceCachedWrite, setPriceCachedWrite] = useState("");
+  const [endpointOverride, setEndpointOverride] = useState("");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [priceSource, setPriceSource] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<PricingPreviewCapabilities | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [draftHint, setDraftHint] = useState<string | null>(null);
 
   const [profileFor, setProfileFor] = useState<string | null>(null);
+  const [profileCapabilities, setProfileCapabilities] = useState<PricingPreviewCapabilities | null>(null);
   const [profileName, setProfileName] = useState("");
   const [profileEffort, setProfileEffort] = useState("");
   const [profileBudget, setProfileBudget] = useState("");
@@ -593,16 +598,110 @@ function DeploymentsTab({
   const [editing, setEditing] = useState<Deployment | null>(null);
   const { confirm, confirmElement } = useConfirm();
 
-  // 从渠道模型列表选用时预填表单，由用户确认后创建
+  /** 加载渠道已拉取的模型列表（首次访问会自动拉取）。 */
+  async function loadProviderModels(id: string): Promise<string[]> {
+    setModelsLoading(true);
+    try {
+      const data = await api.get<{ models: string[] }>(`/api/providers/${id}/models`);
+      setProviderModels(data.models);
+      return data.models;
+    } catch (e) {
+      setError(`获取渠道模型失败：${e instanceof Error ? e.message : String(e)}`);
+      setProviderModels([]);
+      return [];
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
+  /** 选择模型后的自动匹配：canonical Model、默认名称、价格与模型能力。 */
+  async function applyModelDefaults(provider: string, apiModel: string): Promise<void> {
+    const model = await api.post<ModelInfo>("/api/models", {
+      canonical_id: apiModel,
+      display_name: apiModel,
+    });
+    setModelId(model.id);
+    setApiModelName(apiModel);
+    const providerName = providers.find((p) => p.id === provider)?.name;
+    setName((current) =>
+      current.trim() ? current : providerName ? `${apiModel} · ${providerName}` : apiModel
+    );
+    const preview = await api.get<PricingPreview>(
+      `/api/pricing/preview?provider_id=${encodeURIComponent(provider)}&api_model_name=${encodeURIComponent(apiModel)}`
+    );
+    setPriceSource(preview.source);
+    setCapabilities(preview.capabilities);
+    setPriceIn(preview.price_input_per_mtok !== null ? String(preview.price_input_per_mtok) : "");
+    setPriceOut(preview.price_output_per_mtok !== null ? String(preview.price_output_per_mtok) : "");
+    setPriceCachedIn(
+      preview.price_cached_input_per_mtok !== null ? String(preview.price_cached_input_per_mtok) : ""
+    );
+    setPriceCachedWrite(
+      preview.price_cache_write_per_mtok !== null ? String(preview.price_cache_write_per_mtok) : ""
+    );
+  }
+
+  // 未匹配到价格时自动展开「更多设置」，便于手动填写
+  useEffect(() => {
+    if (priceSource === "unknown") setMoreOpen(true);
+  }, [priceSource]);
+
+  async function handleProviderChange(id: string) {
+    setProviderId(id);
+    setProviderModels([]);
+    setApiModelName("");
+    setModelId("");
+    setPriceSource(null);
+    setCapabilities(null);
+    if (!id) return;
+    const list = await loadProviderModels(id);
+    if (list.length === 0) setError("该渠道还没有模型列表，请先到渠道页拉取模型");
+  }
+
+  async function handleModelChange(apiModel: string) {
+    if (!apiModel) return;
+    setError(null);
+    try {
+      await applyModelDefaults(providerId, apiModel);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // 从渠道模型列表选用时预填表单（含价格与能力自动匹配），由用户确认后创建
   useEffect(() => {
     if (!draft) return;
-    setName(`${draft.apiModelName} · `);
-    setModelId(draft.modelId);
     setProviderId(draft.providerId);
+    setModelId(draft.modelId);
     setApiModelName(draft.apiModelName);
     setDraftHint(`已填入「${draft.apiModelName}」，确认后点击创建部署`);
     onDraftApplied();
-  }, [draft, onDraftApplied]);
+    void (async () => {
+      await loadProviderModels(draft.providerId);
+      try {
+        await applyModelDefaults(draft.providerId, draft.apiModelName);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
+
+  /** 打开推理配置对话框，并查询该部署模型的推理能力（用于调整可选项）。 */
+  async function openProfileDialog(deploymentId: string) {
+    setProfileFor(deploymentId);
+    setProfileCapabilities(null);
+    const deployment = deployments.find((d) => d.id === deploymentId);
+    if (!deployment) return;
+    try {
+      const preview = await api.get<PricingPreview>(
+        `/api/pricing/preview?provider_id=${encodeURIComponent(deployment.provider_id)}&api_model_name=${encodeURIComponent(deployment.api_model_name)}`
+      );
+      setProfileCapabilities(preview.capabilities);
+    } catch {
+      // 能力查询失败时不做限制
+    }
+  }
 
   async function createDeployment() {
     setError(null);
@@ -612,13 +711,23 @@ function DeploymentsTab({
         model_id: modelId,
         provider_id: providerId,
         api_model_name: apiModelName,
-        price_input_per_mtok: priceIn ? Number(priceIn) : null,
-        price_output_per_mtok: priceOut ? Number(priceOut) : null,
+        endpoint_override: endpointOverride.trim() || null,
+        price_input_per_mtok: numberOrNull(priceIn),
+        price_output_per_mtok: numberOrNull(priceOut),
+        price_cached_input_per_mtok: numberOrNull(priceCachedIn),
+        price_cache_write_per_mtok: numberOrNull(priceCachedWrite),
       });
       setName("");
       setApiModelName("");
+      setModelId("");
       setPriceIn("");
       setPriceOut("");
+      setPriceCachedIn("");
+      setPriceCachedWrite("");
+      setEndpointOverride("");
+      setPriceSource(null);
+      setCapabilities(null);
+      setMoreOpen(false);
       setDraftHint(null);
       await onChanged();
     } catch (e) {
@@ -690,63 +799,119 @@ function DeploymentsTab({
         <CardHeader>
           <CardTitle>手动创建部署</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3 lg:grid-cols-3">
-          {draftHint && <p className="text-sm text-primary lg:col-span-3">{draftHint}</p>}
-          <div className="space-y-1">
-            <Label>名称</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Kimi K3 · Official" />
+        <CardContent className="space-y-3">
+          {draftHint && <p className="text-sm text-primary">{draftHint}</p>}
+          <div className="grid gap-3 lg:grid-cols-3">
+            <div className="space-y-1">
+              <Label>名称</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Kimi K3 · Official" />
+            </div>
+            <div className="space-y-1">
+              <Label>渠道</Label>
+              <Select value={providerId} onValueChange={(value) => void handleProviderChange(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择渠道" />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.length === 0 && <SelectEmpty>暂无渠道（请先在渠道页添加）</SelectEmpty>}
+                  {providers.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}（{providerTypes.find((t) => t.type === p.type)?.label ?? p.type}）
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="flex items-center gap-1">
+                模型
+                <HelpTip text="来自该渠道已拉取的模型；选择后自动匹配价格与配置，无需填写 API 模型名" />
+              </Label>
+              <Select
+                value={apiModelName}
+                onValueChange={(value) => void handleModelChange(value)}
+                disabled={!providerId || modelsLoading}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={modelsLoading ? "加载中…" : "选择模型"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {!providerId && <SelectEmpty>请先选择渠道</SelectEmpty>}
+                  {providerId && !modelsLoading && providerModels.length === 0 && (
+                    <SelectEmpty>该渠道没有模型（请到渠道页拉取）</SelectEmpty>
+                  )}
+                  {providerModels.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <div className="space-y-1">
-            <Label>模型</Label>
-            <Select value={modelId} onValueChange={setModelId}>
-              <SelectTrigger>
-                <SelectValue placeholder="选择模型" />
-              </SelectTrigger>
-              <SelectContent>
-                {models.length === 0 && <SelectEmpty>暂无模型（可在渠道页拉取模型后创建）</SelectEmpty>}
-                {models.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.display_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+
+          {/* 更多设置：价格与接口地址等，默认收起 */}
+          <div className="rounded-md border">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-accent/40"
+              onClick={() => setMoreOpen((open) => !open)}
+            >
+              <span className="flex items-center gap-2 font-medium">
+                更多设置
+                {capabilities?.reasoning === false && <Badge variant="outline">未声明推理能力</Badge>}
+                {priceSource === "unknown" && <Badge variant="warning">未匹配到价格</Badge>}
+              </span>
+              <ChevronDown className={cn("h-4 w-4 transition-transform", moreOpen && "rotate-180")} />
+            </button>
+            <div
+              className={cn(
+                "overflow-hidden transition-all duration-300",
+                moreOpen ? "max-h-[520px] opacity-100" : "max-h-0 opacity-0"
+              )}
+            >
+              <div className="grid gap-3 border-t p-3 lg:grid-cols-2">
+                <div className="space-y-1 lg:col-span-2">
+                  <Label>API 模型名（自动匹配）</Label>
+                  <Input value={apiModelName} readOnly placeholder="选择模型后自动填入" className="font-mono" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="flex items-center gap-1">
+                    输入价（$/M tokens）
+                    <HelpTip text="留空表示按目录自动匹配（models.dev / LiteLLM）；手动填写优先" />
+                  </Label>
+                  <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="自动匹配" />
+                </div>
+                <div className="space-y-1">
+                  <Label>输出价（$/M tokens）</Label>
+                  <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="自动匹配" />
+                </div>
+                <div className="space-y-1">
+                  <Label>缓存读取价（$/M tokens）</Label>
+                  <Input value={priceCachedIn} onChange={(e) => setPriceCachedIn(e.target.value)} placeholder="自动匹配" />
+                </div>
+                <div className="space-y-1">
+                  <Label>缓存写入价（$/M tokens）</Label>
+                  <Input value={priceCachedWrite} onChange={(e) => setPriceCachedWrite(e.target.value)} placeholder="自动匹配" />
+                </div>
+                <div className="space-y-1 lg:col-span-2">
+                  <Label>接口地址覆盖</Label>
+                  <Input value={endpointOverride} onChange={(e) => setEndpointOverride(e.target.value)} placeholder="可选，覆盖渠道默认地址" />
+                </div>
+                {(priceSource !== null || capabilities !== null) && (
+                  <p className="text-xs text-muted-foreground lg:col-span-2">
+                    {priceSource === "unknown"
+                      ? "价格：未匹配到，请手动填写"
+                      : `价格来源：${labelForPriceSource(priceSource)}`}
+                    {capabilities?.output_limit ? ` · 建议最大输出不超过 ${capabilities.output_limit}` : ""}
+                    {capabilities?.context_limit ? ` · 上下文上限 ${capabilities.context_limit}` : ""}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="space-y-1">
-            <Label>渠道</Label>
-            <Select value={providerId} onValueChange={setProviderId}>
-              <SelectTrigger>
-                <SelectValue placeholder="选择渠道" />
-              </SelectTrigger>
-              <SelectContent>
-                {providers.length === 0 && <SelectEmpty>暂无渠道（请先在渠道页添加）</SelectEmpty>}
-                {providers.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}（{p.type}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label>API 模型名</Label>
-            <Input value={apiModelName} onChange={(e) => setApiModelName(e.target.value)} placeholder="例如：gpt-4o" />
-          </div>
-          <div className="space-y-1">
-            <Label>
-              输入价（$/M tokens）
-              <HelpTip text="手动价格设置，优先级高于 models.dev 与 LiteLLM 价格目录" />
-            </Label>
-            <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="可选" />
-          </div>
-          <div className="space-y-1">
-            <Label>
-              输出价（$/M tokens）
-              <HelpTip text="手动价格设置，优先级高于 models.dev 与 LiteLLM 价格目录" />
-            </Label>
-            <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="可选" />
-          </div>
-          <div className="lg:col-span-3">
+
+          <div>
             <ErrorText error={error} />
             <Button onClick={createDeployment} disabled={!name || !modelId || !providerId || !apiModelName}>
               创建部署
@@ -802,7 +967,7 @@ function DeploymentsTab({
                   <TableCell className="text-xs text-muted-foreground">{fmtTime(d.created_at)}</TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="outline" onClick={() => setProfileFor(d.id)}>
+                      <Button size="sm" variant="outline" onClick={() => void openProfileDialog(d.id)}>
                         + 推理配置
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => setEditing(d)}>
@@ -835,15 +1000,30 @@ function DeploymentsTab({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <Label>思考程度</Label>
-                <Input value={profileEffort} onChange={(e) => setProfileEffort(e.target.value)} placeholder="low / medium / high / max" />
+                <Label className="flex items-center gap-1">
+                  思考程度
+                  {profileCapabilities?.reasoning === false && (
+                    <HelpTip text="该模型未声明推理能力，此处设置可能被忽略" />
+                  )}
+                </Label>
+                <Input
+                  value={profileEffort}
+                  onChange={(e) => setProfileEffort(e.target.value)}
+                  placeholder="low / medium / high / max"
+                  disabled={profileCapabilities?.reasoning === false}
+                />
               </div>
               <div className="space-y-1">
                 <Label className="flex items-center gap-1">
                   思考预算（token）
                   <HelpTip text="仅部分渠道支持；留空表示不指定" />
                 </Label>
-                <Input value={profileBudget} onChange={(e) => setProfileBudget(e.target.value)} placeholder="留空 = 不指定" />
+                <Input
+                  value={profileBudget}
+                  onChange={(e) => setProfileBudget(e.target.value)}
+                  placeholder="留空 = 不指定"
+                  disabled={profileCapabilities?.reasoning === false}
+                />
               </div>
               <div className="space-y-1">
                 <Label className="flex items-center gap-1">

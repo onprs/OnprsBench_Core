@@ -28,6 +28,7 @@ from ..schemas import (
     ReasoningProfileCreate,
 )
 from ..services import credentials
+from ..services import pricing
 
 router = APIRouter(prefix="/api", tags=["setup"])
 
@@ -77,6 +78,8 @@ def deployment_dict(d: Deployment) -> dict:
         "custom_options": d.custom_options,
         "price_input_per_mtok": d.price_input_per_mtok,
         "price_output_per_mtok": d.price_output_per_mtok,
+        "price_cached_input_per_mtok": d.price_cached_input_per_mtok,
+        "price_cache_write_per_mtok": d.price_cache_write_per_mtok,
         "created_at": d.created_at,
     }
 
@@ -255,6 +258,30 @@ def create_model(body: ModelCreate, db: Session = Depends(get_db)) -> dict:
 # ---------------------------------------------------------------------------
 # Deployment
 # ---------------------------------------------------------------------------
+
+
+@router.get("/pricing/preview")
+def pricing_preview(provider_id: str, api_model_name: str, db: Session = Depends(get_db)) -> dict:
+    """按渠道 + 模型名预览价格与模型能力（部署表单自动填充用）。
+
+    价格优先级与 Run 时的解析一致（手动 override 在创建时由用户填写，不参与预览）。
+    capabilities 为 None 表示价格目录中没有该模型，界面不做能力限制。
+    """
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "渠道不存在")
+    resolved = pricing.resolve_pricing_for(
+        provider_type=provider.type,
+        api_model_name=api_model_name,
+    )
+    return {
+        "source": resolved.source,
+        "price_input_per_mtok": resolved.price_input_per_mtok,
+        "price_output_per_mtok": resolved.price_output_per_mtok,
+        "price_cached_input_per_mtok": resolved.price_cached_input_per_mtok,
+        "price_cache_write_per_mtok": resolved.price_cache_write_per_mtok,
+        "capabilities": pricing.model_capabilities(api_model_name),
+    }
 
 
 @router.get("/deployments")

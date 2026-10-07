@@ -89,7 +89,30 @@ export interface Deployment {
   endpoint_override: string | null;
   price_input_per_mtok: number | null;
   price_output_per_mtok: number | null;
+  price_cached_input_per_mtok: number | null;
+  price_cache_write_per_mtok: number | null;
   created_at: string;
+}
+
+/** 模型能力（来自 models.dev 目录；null 表示目录中没有该模型） */
+export interface PricingPreviewCapabilities {
+  source: string;
+  reasoning: boolean | null;
+  tool_call: boolean | null;
+  attachment: boolean | null;
+  context_limit: number | null;
+  output_limit: number | null;
+  modalities: unknown;
+}
+
+/** 价格与能力预览（部署表单自动填充） */
+export interface PricingPreview {
+  source: string;
+  price_input_per_mtok: number | null;
+  price_output_per_mtok: number | null;
+  price_cached_input_per_mtok: number | null;
+  price_cache_write_per_mtok: number | null;
+  capabilities: PricingPreviewCapabilities | null;
 }
 
 export interface ReasoningProfile {

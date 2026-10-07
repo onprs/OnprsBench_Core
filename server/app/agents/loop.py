@@ -90,6 +90,7 @@ class AgentLoopResult:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -149,7 +150,7 @@ async def run_agent_loop(
     should_stop = False
 
     def accumulate(usage: Any) -> None:
-        for attr in ("input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens"):
+        for attr in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens", "reasoning_tokens"):
             value = _usage_field(usage, attr)
             if value is not None:
                 setattr(result, attr, (getattr(result, attr) or 0) + value)
@@ -188,6 +189,7 @@ async def run_agent_loop(
                     "content_chars": len(step.content or ""),
                     "input_tokens": _usage_field(step.usage, "input_tokens"),
                     "cached_input_tokens": _usage_field(step.usage, "cached_input_tokens"),
+                    "cache_write_tokens": _usage_field(step.usage, "cache_write_tokens"),
                     "output_tokens": _usage_field(step.usage, "output_tokens"),
                     "reasoning_tokens": _usage_field(step.usage, "reasoning_tokens"),
                     "ttft_s": step.ttft_s,

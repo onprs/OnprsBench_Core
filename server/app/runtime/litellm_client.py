@@ -152,6 +152,10 @@ def _extract_usage_from(usage: Any) -> UsageInfo:
     prompt_details = getattr(usage, "prompt_tokens_details", None)
     if prompt_details is not None:
         cached = getattr(prompt_details, "cached_tokens", None)
+    # 缓存写入：Anthropic 风格为顶层字段，部分网关放在 prompt_tokens_details
+    cache_write = getattr(usage, "cache_creation_input_tokens", None)
+    if cache_write is None and prompt_details is not None:
+        cache_write = getattr(prompt_details, "cache_creation_tokens", None)
     reasoning = None
     completion_details = getattr(usage, "completion_tokens_details", None)
     if completion_details is not None:
@@ -159,6 +163,7 @@ def _extract_usage_from(usage: Any) -> UsageInfo:
     return UsageInfo(
         input_tokens=getattr(usage, "prompt_tokens", None),
         cached_input_tokens=cached,
+        cache_write_tokens=cache_write,
         output_tokens=getattr(usage, "completion_tokens", None),
         reasoning_tokens=reasoning,
     )

@@ -108,6 +108,9 @@ class Deployment(Base):
     # 用户级价格 override（美元 / 百万 token），优先级最高
     price_input_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     price_output_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    # 缓存读取 / 写入单价（Anthropic 风格缓存计费）
+    price_cached_input_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    price_cache_write_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     model: Mapped[Model] = relationship(back_populates="deployments")
@@ -379,6 +382,7 @@ class UsageRecord(Base):
 
     input_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     cached_input_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    cache_write_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     reasoning_tokens: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
 
@@ -397,6 +401,7 @@ class PricingSnapshot(Base):
     price_input_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     price_output_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     price_cached_input_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    price_cache_write_per_mtok: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
     currency: Mapped[str] = mapped_column(sa.String(8), default="USD")
     raw_json: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
     captured_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

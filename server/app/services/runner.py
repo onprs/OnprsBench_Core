@@ -198,6 +198,7 @@ class PricingRegistry:
                 price_input_per_mtok=resolved.price_input_per_mtok,
                 price_output_per_mtok=resolved.price_output_per_mtok,
                 price_cached_input_per_mtok=resolved.price_cached_input_per_mtok,
+                price_cache_write_per_mtok=resolved.price_cache_write_per_mtok,
                 currency=resolved.currency,
                 raw_json=resolved.raw,
             )
@@ -226,6 +227,7 @@ def _record_usage(
             input_tokens=usage.input_tokens,
             cached_input_tokens=usage.cached_input_tokens,
             output_tokens=usage.output_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
         )
     with session_scope() as session:
         session.add(
@@ -235,6 +237,7 @@ def _record_usage(
                 owner_id=owner_id,
                 input_tokens=usage.input_tokens,
                 cached_input_tokens=usage.cached_input_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
                 output_tokens=usage.output_tokens,
                 reasoning_tokens=usage.reasoning_tokens,
                 pricing_snapshot_id=snapshot_id,
@@ -259,7 +262,7 @@ def _record_solver_usage(
     """
     snapshot_id, resolved = (pricing if pricing else (None, None))
 
-    def cost_of(input_tokens, cached_tokens, output_tokens) -> float | None:
+    def cost_of(input_tokens, cached_tokens, output_tokens, write_tokens) -> float | None:
         if resolved is None:
             return None
         return compute_cost(
@@ -267,6 +270,7 @@ def _record_solver_usage(
             input_tokens=input_tokens,
             cached_input_tokens=cached_tokens,
             output_tokens=output_tokens,
+            cache_write_tokens=write_tokens,
         )
 
     rows: list[UsageRecord] = []
@@ -279,6 +283,7 @@ def _record_solver_usage(
                     owner_id=owner_id,
                     input_tokens=record.get("input_tokens"),
                     cached_input_tokens=record.get("cached_input_tokens"),
+                    cache_write_tokens=record.get("cache_write_tokens"),
                     output_tokens=record.get("output_tokens"),
                     reasoning_tokens=record.get("reasoning_tokens"),
                     pricing_snapshot_id=snapshot_id,
@@ -286,6 +291,7 @@ def _record_solver_usage(
                         record.get("input_tokens"),
                         record.get("cached_input_tokens"),
                         record.get("output_tokens"),
+                        record.get("cache_write_tokens"),
                     ),
                 )
             )
@@ -297,10 +303,16 @@ def _record_solver_usage(
                 owner_id=owner_id,
                 input_tokens=usage.input_tokens,
                 cached_input_tokens=usage.cached_input_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
                 output_tokens=usage.output_tokens,
                 reasoning_tokens=usage.reasoning_tokens,
                 pricing_snapshot_id=snapshot_id,
-                cost=cost_of(usage.input_tokens, usage.cached_input_tokens, usage.output_tokens),
+                cost=cost_of(
+                    usage.input_tokens,
+                    usage.cached_input_tokens,
+                    usage.output_tokens,
+                    usage.cache_write_tokens,
+                ),
             )
         )
 
@@ -450,6 +462,7 @@ async def _call_solver_agent(
                 output_tokens=result.output_tokens,
                 cached=result.cached_input_tokens,
                 reasoning=result.reasoning_tokens,
+                cache_write=result.cache_write_tokens,
             ),
             started_at=result.started_at,
             finished_at=result.finished_at,
@@ -499,6 +512,7 @@ async def _call_solver_oneshot(
                 "content_chars": len(result.text or ""),
                 "input_tokens": getattr(result.usage, "input_tokens", None),
                 "cached_input_tokens": getattr(result.usage, "cached_input_tokens", None),
+                "cache_write_tokens": getattr(result.usage, "cache_write_tokens", None),
                 "output_tokens": getattr(result.usage, "output_tokens", None),
                 "reasoning_tokens": getattr(result.usage, "reasoning_tokens", None),
                 "ttft_s": result.ttft_s,
@@ -508,12 +522,13 @@ async def _call_solver_oneshot(
     )
 
 
-def _usage_of(*, input_tokens, output_tokens, cached, reasoning):
+def _usage_of(*, input_tokens, output_tokens, cached, reasoning, cache_write=None):
     from ..runtime.base import UsageInfo
 
     return UsageInfo(
         input_tokens=input_tokens,
         cached_input_tokens=cached,
+        cache_write_tokens=cache_write,
         output_tokens=output_tokens,
         reasoning_tokens=reasoning,
     )

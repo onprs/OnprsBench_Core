@@ -38,3 +38,15 @@ export function labelForContamination(value: string | null | undefined): string 
   if (!value) return "—";
   return CONTAMINATION_LABELS[value] ?? value;
 }
+
+const PRICE_SOURCE_LABELS: Record<string, string> = {
+  manual_override: "手动设置",
+  models_dev: "models.dev",
+  litellm_cost_map: "LiteLLM 价格目录",
+  unknown: "未匹配",
+};
+
+export function labelForPriceSource(value: string | null | undefined): string {
+  if (!value) return "—";
+  return PRICE_SOURCE_LABELS[value] ?? value;
+}

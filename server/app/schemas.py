@@ -35,6 +35,8 @@ class DeploymentCreate(BaseModel):
     custom_options: dict = Field(default_factory=dict)
     price_input_per_mtok: float | None = None
     price_output_per_mtok: float | None = None
+    price_cached_input_per_mtok: float | None = None
+    price_cache_write_per_mtok: float | None = None
 
 
 class DeploymentUpdate(BaseModel):
@@ -44,6 +46,8 @@ class DeploymentUpdate(BaseModel):
     custom_options: dict | None = None
     price_input_per_mtok: float | None = None
     price_output_per_mtok: float | None = None
+    price_cached_input_per_mtok: float | None = None
+    price_cache_write_per_mtok: float | None = None
 
 
 class ReasoningProfileCreate(BaseModel):
