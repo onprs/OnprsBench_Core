@@ -91,6 +91,8 @@ class ProviderModelCatalog(Base):
     provider_id: Mapped[str] = mapped_column(sa.ForeignKey("providers.id"), unique=True, index=True)
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     models: Mapped[list] = mapped_column(sa.JSON, default=list)
+    # 用户在渠道页勾选的模型（部署只从已选模型中选择）
+    selected_models: Mapped[list] = mapped_column(sa.JSON, default=list)
 
 
 class Deployment(Base):

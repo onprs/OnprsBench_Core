@@ -35,6 +35,48 @@ def test_model_catalog_cached_and_refreshable(client: TestClient, mock_setup: di
     assert row["model_catalog_fetched_at"]
 
 
+def test_model_selection_toggle(client: TestClient, mock_setup: dict) -> None:
+    """渠道页勾选/取消模型：持久化并在列表接口返回。"""
+    from app.api import providers as providers_api
+
+    provider_id = mock_setup["provider"]["id"]
+    first = client.get(f"/api/providers/{provider_id}/models").json()
+    assert first["selected_models"] == []
+
+    toggled = client.post(
+        f"/api/providers/{provider_id}/models/toggle", json={"model": "mock-strong"}
+    )
+    assert toggled.status_code == 200, toggled.text
+    assert toggled.json()["selected_models"] == ["mock-strong"]
+
+    again = client.get(f"/api/providers/{provider_id}/models").json()
+    assert again["selected_models"] == ["mock-strong"]
+
+    untoggled = client.post(
+        f"/api/providers/{provider_id}/models/toggle", json={"model": "mock-strong"}
+    )
+    assert untoggled.json()["selected_models"] == []
+
+    # 不在已拉取列表中的模型不能选择
+    invalid = client.post(
+        f"/api/providers/{provider_id}/models/toggle", json={"model": "no/such-model"}
+    )
+    assert invalid.status_code == 400
+
+    # 重新拉取后，已下架的模型从已选列表移除
+    client.post(f"/api/providers/{provider_id}/models/toggle", json={"model": "mock-weak"})
+    monkeypatch_target = providers_api._fetch_provider_models
+    providers_api._fetch_provider_models = lambda provider: ["mock-strong"]
+    try:
+        refreshed = client.get(
+            f"/api/providers/{provider_id}/models", params={"refresh": True}
+        ).json()
+    finally:
+        providers_api._fetch_provider_models = monkeypatch_target
+    assert refreshed["models"] == ["mock-strong"]
+    assert refreshed["selected_models"] == []
+
+
 def test_model_catalog_removed_with_provider(client: TestClient) -> None:
     from app.db import SessionLocal
     from app.models import ProviderModelCatalog

@@ -23,6 +23,7 @@ from ..schemas import (
     DeploymentCreate,
     DeploymentUpdate,
     ModelCreate,
+    ModelSelectionToggle,
     ProviderCreate,
     ProviderUpdate,
     ReasoningProfileCreate,
@@ -218,6 +219,7 @@ def list_provider_models(provider_id: str, refresh: bool = False, db: Session = 
     if not refresh and catalog is not None:
         return {
             "models": catalog.models,
+            "selected_models": catalog.selected_models or [],
             "fetched_at": catalog.fetched_at,
             "from_cache": True,
         }
@@ -229,9 +231,40 @@ def list_provider_models(provider_id: str, refresh: bool = False, db: Session = 
     else:
         catalog.models = models
         catalog.fetched_at = utcnow()
+        # 上游不再提供的模型从已选列表移除
+        selected = [m for m in (catalog.selected_models or []) if m in models]
+        catalog.selected_models = selected
     db.commit()
     db.refresh(catalog)
-    return {"models": models, "fetched_at": catalog.fetched_at, "from_cache": False}
+    return {
+        "models": models,
+        "selected_models": catalog.selected_models or [],
+        "fetched_at": catalog.fetched_at,
+        "from_cache": False,
+    }
+
+
+@router.post("/providers/{provider_id}/models/toggle")
+def toggle_provider_model(
+    provider_id: str, body: ModelSelectionToggle, db: Session = Depends(get_db)
+) -> dict:
+    """切换某个模型的选择状态（渠道页勾选，部署只从已选模型中选择）。"""
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "渠道不存在")
+    catalog = db.scalar(
+        sa.select(ProviderModelCatalog).where(ProviderModelCatalog.provider_id == provider_id)
+    )
+    if catalog is None or body.model not in (catalog.models or []):
+        raise HTTPException(400, "该模型不在该渠道已拉取列表中")
+    selected = list(catalog.selected_models or [])
+    if body.model in selected:
+        selected.remove(body.model)
+    else:
+        selected.append(body.model)
+    catalog.selected_models = selected
+    db.commit()
+    return {"selected_models": selected}
 
 
 # ---------------------------------------------------------------------------

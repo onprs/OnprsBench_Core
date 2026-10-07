@@ -20,13 +20,6 @@ function ErrorText({ error }: { error: string | null }) {
   return <p className="text-sm text-destructive">{error}</p>;
 }
 
-/** 从渠道模型列表选用模型时，填入部署创建表单的草稿。 */
-export interface DeploymentDraft {
-  providerId: string;
-  modelId: string;
-  apiModelName: string;
-}
-
 export function SetupPage() {
   const [providerTypes, setProviderTypes] = useState<ProviderType[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -38,7 +31,6 @@ export function SetupPage() {
       ? "deployments"
       : "providers"
   );
-  const [deploymentDraft, setDeploymentDraft] = useState<DeploymentDraft | null>(null);
   const reload = useCallback(async () => {
     try {
       const [types, provs, deps, profs] = await Promise.all([
@@ -75,10 +67,6 @@ export function SetupPage() {
             providers={providers}
             deployments={deployments}
             onChanged={reload}
-            onUseModel={(draft) => {
-              setDeploymentDraft(draft);
-              setTab("deployments");
-            }}
           />
         </TabsContent>
         <TabsContent value="deployments" forceMount className="data-[state=inactive]:hidden">
@@ -88,8 +76,6 @@ export function SetupPage() {
             deployments={deployments}
             profiles={profiles}
             onChanged={reload}
-            draft={deploymentDraft}
-            onDraftApplied={() => setDeploymentDraft(null)}
           />
         </TabsContent>
       </Tabs>
@@ -106,13 +92,11 @@ function ProvidersTab({
   providers,
   deployments,
   onChanged,
-  onUseModel,
 }: {
   providerTypes: ProviderType[];
   providers: Provider[];
   deployments: Deployment[];
   onChanged: () => Promise<void>;
-  onUseModel: (draft: DeploymentDraft) => void;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("mock");
@@ -124,6 +108,7 @@ function ProvidersTab({
   const [modelsPanel, setModelsPanel] = useState<{
     provider: Provider;
     models: string[] | null;
+    selected: string[];
     error: string | null;
     fetchedAt: string | null;
     source: "loading" | "cached" | "fresh" | "empty";
@@ -156,23 +141,25 @@ function ProvidersTab({
   async function showCachedModels(provider: Provider) {
     setPanelOpen(true);
     if (provider.model_catalog_count === 0) {
-      setModelsPanel({ provider, models: [], error: null, fetchedAt: null, source: "empty" });
+      setModelsPanel({ provider, models: [], selected: [], error: null, fetchedAt: null, source: "empty" });
       return;
     }
     setModelsPanel({
       provider,
       models: null,
+      selected: [],
       error: null,
       fetchedAt: provider.model_catalog_fetched_at,
       source: "loading",
     });
     try {
-      const data = await api.get<{ models: string[]; fetched_at: string | null }>(
+      const data = await api.get<{ models: string[]; selected_models: string[]; fetched_at: string | null }>(
         `/api/providers/${provider.id}/models`
       );
       setModelsPanel({
         provider,
         models: data.models,
+        selected: data.selected_models ?? [],
         error: null,
         fetchedAt: data.fetched_at,
         source: "cached",
@@ -181,6 +168,7 @@ function ProvidersTab({
       setModelsPanel({
         provider,
         models: null,
+        selected: [],
         error: e instanceof Error ? e.message : String(e),
         fetchedAt: provider.model_catalog_fetched_at,
         source: "cached",
@@ -194,17 +182,19 @@ function ProvidersTab({
     setModelsPanel({
       provider,
       models: null,
+      selected: [],
       error: null,
       fetchedAt: provider.model_catalog_fetched_at,
       source: "loading",
     });
     try {
-      const data = await api.get<{ models: string[]; fetched_at: string | null }>(
+      const data = await api.get<{ models: string[]; selected_models: string[]; fetched_at: string | null }>(
         `/api/providers/${provider.id}/models?refresh=true`
       );
       setModelsPanel({
         provider,
         models: data.models,
+        selected: data.selected_models ?? [],
         error: null,
         fetchedAt: data.fetched_at,
         source: "fresh",
@@ -214,6 +204,7 @@ function ProvidersTab({
       setModelsPanel({
         provider,
         models: null,
+        selected: [],
         error: e instanceof Error ? e.message : String(e),
         fetchedAt: provider.model_catalog_fetched_at,
         source: "fresh",
@@ -236,16 +227,14 @@ function ProvidersTab({
     }
   }
 
-  async function useRemoteModel(provider: Provider, apiModelName: string) {
-    // 仅确保 canonical Model 存在，并填入部署创建表单；由用户确认后创建部署
-    setListError(null);
+  /** 勾选/取消勾选模型：已选模型在部署页可选。 */
+  async function toggleModel(providerId: string, model: string) {
     try {
-      const model = await api.post<ModelInfo>("/api/models", {
-        canonical_id: apiModelName,
-        display_name: apiModelName,
-      });
-      await onChanged();
-      onUseModel({ providerId: provider.id, modelId: model.id, apiModelName });
+      const data = await api.post<{ selected_models: string[] }>(
+        `/api/providers/${providerId}/models/toggle`,
+        { model }
+      );
+      setModelsPanel((panel) => (panel ? { ...panel, selected: data.selected_models ?? [] } : panel));
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
     }
@@ -391,6 +380,7 @@ function ProvidersTab({
                   {modelsPanel.source === "fresh" &&
                     `刚刚拉取${modelsPanel.fetchedAt ? ` · ${fmtTime(modelsPanel.fetchedAt)}` : ""}`}
                   {modelsPanel.source === "empty" && "尚未拉取模型"}
+                  {modelsPanel.selected.length > 0 ? ` · 已选 ${modelsPanel.selected.length} 个` : ""}
                 </p>
               )}
               {modelsPanel?.source === "loading" && (
@@ -425,20 +415,32 @@ function ProvidersTab({
               )}
               {modelsPanel?.models && modelsPanel.models.length > 0 && (
                 <div className="max-h-[60vh] space-y-1 overflow-auto">
-                  {modelsPanel.models.map((m) => {
-                    const added = deployments.some(
+                  {[
+                    ...modelsPanel.selected.filter((m) => modelsPanel.models?.includes(m)),
+                    ...modelsPanel.models.filter((m) => !modelsPanel.selected.includes(m)),
+                  ].map((m) => {
+                    const isSelected = modelsPanel.selected.includes(m);
+                    const hasDeployment = deployments.some(
                       (d) => d.provider_id === modelsPanel.provider.id && d.api_model_name === m
                     );
                     return (
-                      <div key={m} className="flex items-center justify-between rounded border px-3 py-1.5 text-sm">
-                        <span className="font-mono">{m}</span>
+                      <div
+                        key={m}
+                        className={cn(
+                          "flex items-center justify-between rounded border px-3 py-1.5 text-sm",
+                          isSelected && "border-primary/40 bg-accent/40"
+                        )}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-mono">{m}</span>
+                          {hasDeployment && <Badge variant="outline">已有部署</Badge>}
+                        </span>
                         <Button
                           size="sm"
-                          variant="outline"
-                          disabled={added}
-                          onClick={() => void useRemoteModel(modelsPanel.provider, m)}
+                          variant={isSelected ? "secondary" : "outline"}
+                          onClick={() => void toggleModel(modelsPanel.provider.id, m)}
                         >
-                          {added ? "已有部署" : "选择"}
+                          {isSelected ? "取消选择" : "选择"}
                         </Button>
                       </div>
                     );
@@ -559,16 +561,12 @@ function DeploymentsTab({
   deployments,
   profiles,
   onChanged,
-  draft,
-  onDraftApplied,
 }: {
   providers: Provider[];
   providerTypes: ProviderType[];
   deployments: Deployment[];
   profiles: ReasoningProfile[];
   onChanged: () => Promise<void>;
-  draft: DeploymentDraft | null;
-  onDraftApplied: () => void;
 }) {
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState("");
@@ -585,7 +583,6 @@ function DeploymentsTab({
   const [capabilities, setCapabilities] = useState<PricingPreviewCapabilities | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [draftHint, setDraftHint] = useState<string | null>(null);
 
   const [profileFor, setProfileFor] = useState<string | null>(null);
   const [profileCapabilities, setProfileCapabilities] = useState<PricingPreviewCapabilities | null>(null);
@@ -598,13 +595,16 @@ function DeploymentsTab({
   const [editing, setEditing] = useState<Deployment | null>(null);
   const { confirm, confirmElement } = useConfirm();
 
-  /** 加载渠道已拉取的模型列表（首次访问会自动拉取）。 */
+  /** 加载渠道已勾选的模型（部署只从已选模型中选择）。 */
   async function loadProviderModels(id: string): Promise<string[]> {
     setModelsLoading(true);
     try {
-      const data = await api.get<{ models: string[] }>(`/api/providers/${id}/models`);
-      setProviderModels(data.models);
-      return data.models;
+      const data = await api.get<{ models: string[]; selected_models: string[] }>(
+        `/api/providers/${id}/models`
+      );
+      const selected = data.selected_models ?? [];
+      setProviderModels(selected);
+      return selected;
     } catch (e) {
       setError(`获取渠道模型失败：${e instanceof Error ? e.message : String(e)}`);
       setProviderModels([]);
@@ -655,7 +655,7 @@ function DeploymentsTab({
     setCapabilities(null);
     if (!id) return;
     const list = await loadProviderModels(id);
-    if (list.length === 0) setError("该渠道还没有模型列表，请先到渠道页拉取模型");
+    if (list.length === 0) setError("该渠道还没有选中的模型，请先在渠道页选择模型");
   }
 
   async function handleModelChange(apiModel: string) {
@@ -667,25 +667,6 @@ function DeploymentsTab({
       setError(e instanceof Error ? e.message : String(e));
     }
   }
-
-  // 从渠道模型列表选用时预填表单（含价格与能力自动匹配），由用户确认后创建
-  useEffect(() => {
-    if (!draft) return;
-    setProviderId(draft.providerId);
-    setModelId(draft.modelId);
-    setApiModelName(draft.apiModelName);
-    setDraftHint(`已填入「${draft.apiModelName}」，确认后点击创建部署`);
-    onDraftApplied();
-    void (async () => {
-      await loadProviderModels(draft.providerId);
-      try {
-        await applyModelDefaults(draft.providerId, draft.apiModelName);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft]);
 
   /** 打开推理配置对话框，并查询该部署模型的推理能力（用于调整可选项）。 */
   async function openProfileDialog(deploymentId: string) {
@@ -728,7 +709,6 @@ function DeploymentsTab({
       setPriceSource(null);
       setCapabilities(null);
       setMoreOpen(false);
-      setDraftHint(null);
       await onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -800,14 +780,13 @@ function DeploymentsTab({
           <CardTitle>手动创建部署</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {draftHint && <p className="text-sm text-primary">{draftHint}</p>}
           <div className="grid gap-3 lg:grid-cols-3">
             <div className="space-y-1">
-              <Label>名称</Label>
+              <Label className="flex h-5 items-center gap-1">名称</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：Kimi K3 · Official" />
             </div>
             <div className="space-y-1">
-              <Label>渠道</Label>
+              <Label className="flex h-5 items-center gap-1">渠道</Label>
               <Select value={providerId} onValueChange={(value) => void handleProviderChange(value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择渠道" />
@@ -823,9 +802,9 @@ function DeploymentsTab({
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="flex items-center gap-1">
+              <Label className="flex h-5 items-center gap-1">
                 模型
-                <HelpTip text="来自该渠道已拉取的模型；选择后自动匹配价格与配置，无需填写 API 模型名" />
+                <HelpTip text="来自该渠道已勾选的模型；选择后自动匹配价格与配置，无需填写 API 模型名" />
               </Label>
               <Select
                 value={apiModelName}
@@ -838,7 +817,7 @@ function DeploymentsTab({
                 <SelectContent>
                   {!providerId && <SelectEmpty>请先选择渠道</SelectEmpty>}
                   {providerId && !modelsLoading && providerModels.length === 0 && (
-                    <SelectEmpty>该渠道没有模型（请到渠道页拉取）</SelectEmpty>
+                    <SelectEmpty>该渠道还没有选中的模型（请先在渠道页选择）</SelectEmpty>
                   )}
                   {providerModels.map((m) => (
                     <SelectItem key={m} value={m}>
@@ -872,30 +851,30 @@ function DeploymentsTab({
             >
               <div className="grid gap-3 border-t p-3 lg:grid-cols-2">
                 <div className="space-y-1 lg:col-span-2">
-                  <Label>API 模型名（自动匹配）</Label>
+                  <Label className="flex h-5 items-center gap-1">API 模型名（自动匹配）</Label>
                   <Input value={apiModelName} readOnly placeholder="选择模型后自动填入" className="font-mono" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="flex items-center gap-1">
+                  <Label className="flex h-5 items-center gap-1">
                     输入价（$/M tokens）
                     <HelpTip text="留空表示按目录自动匹配（models.dev / LiteLLM）；手动填写优先" />
                   </Label>
                   <Input value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="自动匹配" />
                 </div>
                 <div className="space-y-1">
-                  <Label>输出价（$/M tokens）</Label>
+                  <Label className="flex h-5 items-center gap-1">输出价（$/M tokens）</Label>
                   <Input value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="自动匹配" />
                 </div>
                 <div className="space-y-1">
-                  <Label>缓存读取价（$/M tokens）</Label>
+                  <Label className="flex h-5 items-center gap-1">缓存读取价（$/M tokens）</Label>
                   <Input value={priceCachedIn} onChange={(e) => setPriceCachedIn(e.target.value)} placeholder="自动匹配" />
                 </div>
                 <div className="space-y-1">
-                  <Label>缓存写入价（$/M tokens）</Label>
+                  <Label className="flex h-5 items-center gap-1">缓存写入价（$/M tokens）</Label>
                   <Input value={priceCachedWrite} onChange={(e) => setPriceCachedWrite(e.target.value)} placeholder="自动匹配" />
                 </div>
                 <div className="space-y-1 lg:col-span-2">
-                  <Label>接口地址覆盖</Label>
+                  <Label className="flex h-5 items-center gap-1">接口地址覆盖</Label>
                   <Input value={endpointOverride} onChange={(e) => setEndpointOverride(e.target.value)} placeholder="可选，覆盖渠道默认地址" />
                 </div>
                 {(priceSource !== null || capabilities !== null) && (
