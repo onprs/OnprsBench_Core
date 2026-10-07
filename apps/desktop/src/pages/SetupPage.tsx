@@ -783,6 +783,26 @@ function DeploymentsTab({
     }
   }
 
+  /** 重置部署创建表单的全部选择与输入。 */
+  function clearSelection() {
+    setName("");
+    setProviderId("");
+    setProviderModels([]);
+    setApiModelName("");
+    setModelId("");
+    setPriceIn("");
+    setPriceOut("");
+    setPriceCachedIn("");
+    setPriceCachedWrite("");
+    setEndpointOverride("");
+    setPriceSource(null);
+    setCapabilities(null);
+    setProfileDraft(EMPTY_PROFILE_DRAFT);
+    setMoreOpen(false);
+    setError(null);
+    setModelsLoading(false);
+  }
+
   async function createDeployment() {
     setError(null);
     try {
@@ -824,6 +844,16 @@ function DeploymentsTab({
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  /** 表单是否有任何选择/输入（决定是否显示清除按钮）。 */
+  const hasFormInput =
+    Boolean(providerId) ||
+    Boolean(apiModelName) ||
+    name.trim() !== "" ||
+    [priceIn, priceOut, priceCachedIn, priceCachedWrite, endpointOverride].some(
+      (value) => value.trim() !== ""
+    ) ||
+    Object.values(profileDraft).some((value) => value.trim() !== "");
 
   async function deleteDeployment(d: Deployment) {
     const ok = await confirm({
@@ -971,9 +1001,16 @@ function DeploymentsTab({
 
           <div>
             <ErrorText error={error} />
-            <Button onClick={createDeployment} disabled={!name || !modelId || !providerId || !apiModelName}>
-              创建部署
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button onClick={createDeployment} disabled={!name || !modelId || !providerId || !apiModelName}>
+                创建部署
+              </Button>
+              {hasFormInput && (
+                <Button variant="outline" onClick={clearSelection}>
+                  清除选择
+                </Button>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
