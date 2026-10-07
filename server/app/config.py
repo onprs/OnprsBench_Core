@@ -58,6 +58,10 @@ class Settings(BaseModel):
     # 工具脚本（生成器等）使用的默认 Python 版本
     verifier_default_python: str = "3.12"
 
+    # ---- 服务端口 ----
+    # 可用 ONPRSBENCH_PORT 覆盖（验证/多实例场景需与正式实例隔离）
+    port: int = 8765
+
     # ---- 工具链供给（自带环境，不要求用户预装） ----
     # 下载超时（秒）与镜像基址（None = GitHub 官方地址）
     toolchain_download_timeout_s: float = 600.0
@@ -91,6 +95,7 @@ def load_settings() -> Settings:
         data_dir=data_dir,
         database_url=f"sqlite:///{data_dir / 'onprsbench.db'}",
         protocol_schema_path=repo_root / "protocol" / "schema" / "dataset-protocol-v1.schema.json",
+        port=int(os.environ.get("ONPRSBENCH_PORT", "8765")),
     )
 
 

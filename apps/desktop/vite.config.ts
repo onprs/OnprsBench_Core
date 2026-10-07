@@ -15,7 +15,11 @@ export default defineConfig({
       ignored: ["**/src-tauri/**"],
     },
     proxy: {
-      "/api": { target: "http://127.0.0.1:8765", changeOrigin: true },
+      "/api": {
+        // 可用 VITE_API_TARGET 指向其它后端（验证/多实例场景与正式实例隔离）
+        target: process.env.VITE_API_TARGET ?? "http://127.0.0.1:8765",
+        changeOrigin: true,
+      },
     },
   },
   build: { chunkSizeWarningLimit: 1500 },
